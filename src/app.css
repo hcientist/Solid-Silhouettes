@@ -1,0 +1,1317 @@
+/* ============================================================
+   SolidSilhouettes — the cutting table
+   Tailor's chalk on a self-healing mat. Every person is a
+   graded pattern piece; every size is an annotation on it.
+   ============================================================ */
+
+:root {
+  /* Mat — the dark green-charcoal of a self-healing cutting mat */
+  --mat: #1f2622;
+  --mat-deep: #19201c;
+  --mat-raise: #262e29;
+  --mat-edge: #35403a;
+
+  /* Chalk — warm, dusty, never pure white */
+  --chalk: #efe8d8;
+  --chalk-2: rgba(239, 232, 216, 0.62);
+  --chalk-3: rgba(239, 232, 216, 0.36);
+  --chalk-line: rgba(239, 232, 216, 0.12);
+
+  /* The tailor's chalk triangle set — one colour per person */
+  --c1: #7fb0d9;
+  --c2: #e9c56b;
+  --c3: #e2969f;
+  --c4: #9bc98d;
+  --c5: #bfa5dc;
+  --c6: #e4a273;
+
+  /* Fibreglass tape measure yellow — the one action colour */
+  --tape: #e9c56b;
+  --tape-ink: #241f0e;
+
+  --font-display: 'Big Shoulders Display', 'Haettenschweiler', 'Arial Narrow', sans-serif;
+  --font-body: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --rail-h: 46px;
+  --ease: cubic-bezier(0.2, 0.7, 0.25, 1);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--mat-deep);
+  color: var(--chalk);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* One consistent focus ring everywhere: a chalk box, like a marked-up seam */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--tape);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------- Type roles ---------- */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.012em;
+  line-height: 0.92;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Shell
+   ============================================================ */
+
+.shell {
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: var(--rail-h) minmax(0, 1fr);
+}
+
+/* ---------- Top rail: the workroom sign-out board ---------- */
+
+.rail {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px 0 16px;
+  border-bottom: 1px solid var(--mat-edge);
+  background: var(--mat-deep);
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 21px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  margin: 0;
+}
+.wordmark .solid {
+  color: var(--chalk);
+}
+.wordmark .sil {
+  color: var(--chalk-3);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
+.rail-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Storage state reads like a stamped tag on the job ticket */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chalk-2);
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), color 0.16s var(--ease);
+}
+.tag:hover {
+  border-color: var(--chalk-3);
+  color: var(--chalk);
+}
+.tag[aria-disabled='true'] {
+  cursor: default;
+}
+.tag .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--chalk-3);
+  flex: none;
+}
+.tag.on .dot {
+  background: var(--c4);
+  box-shadow: 0 0 0 3px rgba(155, 201, 141, 0.16);
+}
+.tag.busy .dot {
+  background: var(--tape);
+  animation: pulse 1s var(--ease) infinite;
+}
+.tag.bad .dot {
+  background: var(--c3);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.unit-toggle {
+  display: flex;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.unit-toggle button {
+  border: 0;
+  background: none;
+  padding: 0 9px;
+  height: 24px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--chalk-3);
+  cursor: pointer;
+}
+.unit-toggle button[aria-pressed='true'] {
+  background: var(--chalk);
+  color: var(--mat-deep);
+}
+
+/* ============================================================
+   Body: roster | table
+   ============================================================ */
+
+.body {
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* ---------- Roster ---------- */
+
+.roster {
+  border-right: 1px solid var(--mat-edge);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--mat-deep);
+}
+
+.roster-head {
+  padding: 16px 16px 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.roster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.person {
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 3px 1fr;
+  gap: 11px;
+  align-items: center;
+  padding: 9px 10px 9px 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s var(--ease);
+}
+.person:hover {
+  background: var(--mat-raise);
+}
+.person .swatch {
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--chalk-line);
+  transition: background 0.16s var(--ease);
+}
+.person[aria-current='true'] {
+  background: var(--mat-raise);
+}
+.person[aria-current='true'] .swatch {
+  background: var(--pc);
+}
+.person .pname {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 19px;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: var(--chalk-2);
+  transition: color 0.16s var(--ease);
+  overflow-wrap: anywhere;
+}
+.person[aria-current='true'] .pname,
+.person:hover .pname {
+  color: var(--chalk);
+}
+.person .pspec {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--chalk-3);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roster-foot {
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--mat-edge);
+  display: grid;
+  gap: 8px;
+}
+
+/* Two ways of looking at the whole household, next to each other */
+.view-switch {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.view-switch button {
+  border: 0;
+  border-left: 1px solid var(--mat-edge);
+  background: none;
+  height: 30px;
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+  cursor: pointer;
+  transition: color 0.16s var(--ease), background 0.16s var(--ease);
+}
+.view-switch button:first-child {
+  border-left: 0;
+}
+.view-switch button:hover:not(:disabled) {
+  color: var(--chalk);
+}
+.view-switch button[aria-pressed='true'] {
+  background: var(--chalk);
+  color: var(--mat-deep);
+}
+.view-switch button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  background: none;
+  color: var(--chalk-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), color 0.16s var(--ease),
+    background 0.16s var(--ease);
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--chalk-3);
+  color: var(--chalk);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--tape);
+  border-color: var(--tape);
+  color: var(--tape-ink);
+  font-weight: 500;
+}
+.btn.primary:hover:not(:disabled) {
+  background: #f2d182;
+  border-color: #f2d182;
+  color: var(--tape-ink);
+}
+.btn.ghost {
+  border-color: transparent;
+  color: var(--chalk-3);
+}
+.btn.ghost:hover:not(:disabled) {
+  color: var(--chalk);
+  border-color: var(--mat-edge);
+}
+.btn.danger:hover:not(:disabled) {
+  border-color: var(--c3);
+  color: var(--c3);
+}
+
+/* ============================================================
+   The table — the cutting mat itself
+   ============================================================ */
+
+.table {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  background-color: var(--mat);
+  /* self-healing mat: fine 10px grid, heavier every 50px */
+  background-image: linear-gradient(rgba(239, 232, 216, 0.075) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(239, 232, 216, 0.075) 1px, transparent 1px),
+    linear-gradient(rgba(239, 232, 216, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(239, 232, 216, 0.028) 1px, transparent 1px);
+  background-size: 60px 60px, 60px 60px, 12px 12px, 12px 12px;
+  background-position: -1px -1px;
+}
+
+/* Everything sits inside one sheet's worth of width, so the composition
+   reads as a piece of work laid on the table rather than filling it. */
+.table-inner {
+  min-height: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(260px, 440px) minmax(300px, 372px);
+  justify-content: center;
+  gap: 32px;
+  padding: 22px 26px 32px;
+  align-content: start;
+}
+
+/* ---------- Figure column ---------- */
+
+.stage {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  min-width: 0;
+}
+
+.stage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.stage-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(34px, 5.4vw, 58px);
+  text-transform: uppercase;
+  line-height: 0.86;
+  letter-spacing: 0.005em;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.stage-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+  padding-bottom: 4px;
+}
+
+.figure-box {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 4px 0 8px;
+}
+
+.figure-svg {
+  width: 100%;
+  max-width: 400px;
+  height: auto;
+  max-height: min(74dvh, 660px);
+  overflow: visible;
+}
+
+/* Chalk ink. No non-scaling-stroke here: Chrome ignores pathLength when
+   it is set, which cuts the draw-on animation short. The stroke scaling
+   with the drawing is what we want anyway — a bigger figure, a fatter line. */
+.ink {
+  fill: none;
+  stroke: var(--chalk-2);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.ink-faint {
+  stroke: var(--chalk-3);
+  stroke-width: 1.25;
+}
+
+.region-ink {
+  transition: stroke 0.22s var(--ease), stroke-width 0.22s var(--ease);
+}
+.region-ink.filled {
+  stroke: var(--pc, var(--chalk));
+}
+.region-ink.active {
+  stroke: var(--chalk);
+  stroke-width: 3;
+}
+
+/* The dusty halo behind each stroke — chalk sheds */
+.dust {
+  fill: none;
+  stroke: var(--chalk);
+  stroke-width: 7;
+  opacity: 0;
+  filter: blur(4px);
+  transition: opacity 0.24s var(--ease);
+}
+.dust.active {
+  opacity: 0.16;
+}
+
+.hit {
+  fill: rgba(255, 255, 255, 0.001);
+  stroke: none;
+  cursor: pointer;
+}
+.hit:focus-visible {
+  outline: none;
+}
+.hit-ring {
+  fill: none;
+  stroke: var(--tape);
+  stroke-width: 2;
+  stroke-dasharray: 3 4;
+  opacity: 0;
+  pointer-events: none;
+}
+.hit:focus-visible + .hit-ring {
+  opacity: 1;
+}
+
+/* Keyed letter markers, the way a tech pack keys a drawing */
+.lead {
+  fill: none;
+  stroke: var(--chalk-3);
+  stroke-width: 1.25;
+  stroke-dasharray: 1 3;
+  vector-effect: non-scaling-stroke;
+}
+.key-mark circle {
+  fill: var(--mat);
+  stroke: var(--chalk-3);
+  stroke-width: 1.25;
+  transition: stroke 0.2s var(--ease), fill 0.2s var(--ease);
+}
+.key-mark text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  fill: var(--chalk-2);
+  text-anchor: middle;
+  transition: fill 0.2s var(--ease);
+}
+.key-mark.active circle {
+  stroke: var(--tape);
+  fill: var(--tape);
+}
+.key-mark.active text {
+  fill: var(--tape-ink);
+}
+
+/* Draw-on animation: the figure gets chalked in.
+   Every ink path carries pathLength="1", so one dash of 1.02 covers the
+   whole line no matter how long it really is. */
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1.02;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.drawing .ink {
+  stroke-dasharray: 1.02;
+  animation: draw 0.75s var(--ease) both;
+}
+.drawing .ink.d1 {
+  animation-delay: 0.04s;
+}
+.drawing .ink.d2 {
+  animation-delay: 0.12s;
+}
+.drawing .ink.d3 {
+  animation-delay: 0.22s;
+}
+.drawing .ink.d4 {
+  animation-delay: 0.3s;
+}
+.drawing .key-mark,
+.drawing .grain-arrow {
+  animation: fadein 0.4s var(--ease) 0.55s both;
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- Spec column ---------- */
+
+.specs {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+
+.spec {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+  padding: 13px 14px;
+  border: 1px solid var(--mat-edge);
+  border-left: 2px solid var(--mat-edge);
+  border-radius: 2px;
+  background: rgba(25, 32, 28, 0.72);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease), background 0.18s var(--ease);
+}
+.spec:hover,
+.spec.active {
+  border-color: var(--chalk-3);
+  border-left-color: var(--pc, var(--chalk));
+  background: rgba(38, 46, 41, 0.86);
+}
+
+.spec-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--chalk-3);
+  padding-top: 1px;
+}
+.spec.filled .spec-key {
+  color: var(--pc, var(--chalk));
+}
+
+.spec-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+}
+
+.spec-value {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 27px;
+  text-transform: uppercase;
+  line-height: 1;
+  margin-top: 5px;
+  color: var(--chalk);
+  overflow-wrap: anywhere;
+}
+.spec-value.empty {
+  color: var(--chalk-3);
+  font-weight: 400;
+}
+
+.spec-detail {
+  margin-top: 7px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--chalk-2);
+  letter-spacing: 0.01em;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+}
+.spec-detail b {
+  font-weight: 400;
+  color: var(--chalk-3);
+}
+
+/* When this record last changed, kept visible rather than hover-only —
+   a size is only as good as the date beside it. */
+.spec-stamp {
+  display: block;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+  padding-top: 3px;
+  white-space: nowrap;
+}
+.spec-stamp .revs {
+  display: block;
+  margin-top: 3px;
+  opacity: 0.68;
+}
+.spec:hover .spec-stamp,
+.spec:focus-visible .spec-stamp {
+  color: var(--chalk-2);
+}
+
+/* Spectacles are fine detail on a small piece; keep the line lighter
+   than the body outline so the head still reads first. */
+.spectacles {
+  stroke-width: 1.5;
+}
+
+/* ---------- Vitals: chalk marks on the door frame ---------- */
+
+.vitals {
+  margin-top: 6px;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  background: rgba(25, 32, 28, 0.72);
+  padding: 13px 14px 14px;
+}
+
+.vitals-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.vitals-now {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.vitals-now .n {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 30px;
+  line-height: 1;
+}
+.vitals-now .n span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--chalk-3);
+  margin-left: 3px;
+  letter-spacing: 0.04em;
+}
+.vitals-now .n.empty {
+  color: var(--chalk-3);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.doorframe {
+  margin-top: 14px;
+  padding-left: 12px;
+  border-left: 1px solid var(--chalk-line);
+  display: grid;
+  gap: 0;
+}
+.mark {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--chalk-2);
+}
+.mark::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: var(--pc, var(--chalk-3));
+  opacity: 0.75;
+}
+.mark .when {
+  color: var(--chalk-3);
+}
+.mark .what {
+  letter-spacing: 0.02em;
+}
+.mark .delta {
+  color: var(--c4);
+  font-size: 10.5px;
+}
+
+/* ---------- Empty state ---------- */
+
+.empty-state {
+  grid-column: 1 / -1;
+  display: grid;
+  place-items: center;
+  min-height: 60dvh;
+  text-align: center;
+  padding: 20px;
+}
+.empty-state .inner {
+  max-width: 390px;
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+}
+/* An unmarked figure, waiting to be chalked in */
+.ghost {
+  width: 110px;
+  height: auto;
+  margin-bottom: 6px;
+}
+.ghost path {
+  fill: none;
+  stroke: var(--chalk-line);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+.empty-state h2 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 40px;
+  line-height: 0.9;
+  margin: 0;
+}
+.empty-state p {
+  margin: 0;
+  color: var(--chalk-2);
+  max-width: 34ch;
+}
+
+/* ============================================================
+   Nest — the signature view.
+   Every family member overlaid as a graded pattern size.
+   ============================================================ */
+
+.nest-legend {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+.nest-row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--chalk-line);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s var(--ease);
+}
+.nest-row:hover {
+  background: var(--mat-raise);
+}
+.nest-row svg {
+  overflow: visible;
+}
+.nest-row .nname {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.nest-row .nsize {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--chalk-3);
+  letter-spacing: 0.04em;
+}
+
+.nest-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--chalk-3);
+  letter-spacing: 0.01em;
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--chalk-line);
+}
+
+/* ============================================================
+   Dialogs — a job ticket clipped to the table
+   ============================================================ */
+
+dialog {
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  background: var(--mat-raise);
+  color: var(--chalk);
+  padding: 0;
+  width: min(440px, calc(100vw - 28px));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+dialog::backdrop {
+  background: rgba(12, 16, 14, 0.72);
+  backdrop-filter: blur(2px);
+}
+dialog[open] {
+  animation: ticket 0.22s var(--ease) both;
+}
+@keyframes ticket {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+.dlg-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--mat-edge);
+}
+.dlg-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 28px;
+  line-height: 0.9;
+}
+.dlg-body {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  max-height: min(70dvh, 560px);
+  overflow-y: auto;
+}
+.dlg-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--mat-edge);
+}
+.dlg-foot .spacer {
+  flex: 1;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field > label,
+.fieldset > legend {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+}
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.row-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+/* Regions declare two or three extra fields; let them find their own fit */
+.row-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 10px;
+}
+
+/* The prescription grid, laid out the way the script is written */
+.rx {
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  padding: 12px 13px 11px;
+  margin: 0;
+}
+.rx legend {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+  padding: 0 6px;
+}
+.rx-grid {
+  display: grid;
+  grid-template-columns: 34px repeat(var(--cols), minmax(0, 1fr));
+  gap: 6px;
+  align-items: center;
+}
+.rx-head {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chalk-3);
+  text-align: center;
+}
+.rx-eye {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--chalk-2);
+  letter-spacing: 0.04em;
+}
+.rx-grid input {
+  padding: 7px 6px;
+  font-size: 13px;
+  text-align: center;
+}
+.rx .hint {
+  margin-top: 9px;
+}
+
+/* Revision lists, shared by the garment and person dialogs */
+.hist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.history {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+.history li {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--chalk-line);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.history li:last-child {
+  border-bottom: 0;
+}
+.history .when {
+  color: var(--chalk-3);
+}
+.history .what {
+  color: var(--chalk-2);
+  overflow-wrap: anywhere;
+}
+
+input[type='text'],
+input[type='number'],
+input[type='date'],
+select,
+textarea {
+  width: 100%;
+  background: var(--mat-deep);
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  transition: border-color 0.16s var(--ease);
+}
+input::placeholder,
+textarea::placeholder {
+  color: rgba(239, 232, 216, 0.24);
+}
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--chalk-3);
+}
+textarea {
+  resize: vertical;
+  min-height: 62px;
+  font-family: var(--font-body);
+}
+input[type='number'] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.suffixed {
+  position: relative;
+}
+.suffixed .suffix {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--chalk-3);
+  pointer-events: none;
+}
+.suffixed input {
+  padding-right: 42px;
+}
+
+/* Chalk colour picker */
+.chalks {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.chalks button {
+  width: 30px;
+  height: 30px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  background: var(--sw);
+  cursor: pointer;
+  position: relative;
+  opacity: 0.55;
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
+}
+.chalks button:hover {
+  opacity: 0.85;
+}
+.chalks button[aria-pressed='true'] {
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--mat-raise), 0 0 0 2px var(--chalk);
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--chalk-3);
+  margin: 0;
+}
+.hint a {
+  color: var(--chalk-2);
+}
+
+.notice {
+  border: 1px solid var(--mat-edge);
+  border-left: 2px solid var(--c3);
+  border-radius: 2px;
+  padding: 9px 11px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--chalk-2);
+  background: rgba(226, 150, 159, 0.06);
+}
+.notice.ok {
+  border-left-color: var(--c4);
+  background: rgba(155, 201, 141, 0.06);
+}
+
+.issuers {
+  display: grid;
+  gap: 6px;
+}
+.issuer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--mat-edge);
+  border-radius: 2px;
+  background: var(--mat-deep);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.16s var(--ease);
+}
+.issuer:hover {
+  border-color: var(--chalk-3);
+}
+.issuer .who {
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+.issuer .url {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--chalk-3);
+}
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+
+@media (max-width: 1020px) {
+  .table-inner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .figure-svg {
+    max-height: 46dvh;
+  }
+}
+
+@media (max-width: 780px) {
+  .shell {
+    grid-template-rows: var(--rail-h) auto minmax(0, 1fr);
+  }
+  .body {
+    display: contents;
+  }
+  .roster {
+    border-right: 0;
+    border-bottom: 1px solid var(--mat-edge);
+    flex-direction: row;
+    align-items: center;
+    overflow: hidden;
+  }
+  .roster-head {
+    display: none;
+  }
+  .roster-list {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 10px;
+    flex: 1;
+    scrollbar-width: none;
+  }
+  .roster-list::-webkit-scrollbar {
+    display: none;
+  }
+  .person {
+    width: auto;
+    flex: none;
+    padding: 6px 12px 6px 0;
+  }
+  /* The roster becomes a tab strip; there is no room for spec lines */
+  .person .pspec {
+    display: none;
+  }
+  .person .pname {
+    white-space: nowrap;
+    font-size: 17px;
+  }
+  .roster-foot {
+    border-top: 0;
+    border-left: 1px solid var(--mat-edge);
+    padding: 8px 10px;
+    grid-auto-flow: column;
+  }
+  .roster-foot .btn {
+    height: 30px;
+    padding: 0 10px;
+  }
+  .table-inner {
+    padding: 16px 14px 28px;
+  }
+  .rail {
+    gap: 8px;
+    padding: 0 10px;
+  }
+  .rail .unit-toggle {
+    display: none;
+  }
+  .wordmark {
+    font-size: 18px;
+  }
+  .tag .label-long {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
