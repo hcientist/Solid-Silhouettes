@@ -4,7 +4,19 @@
   import { headline, details } from './describe.js';
   import { fmtLen, fmtMass, fmtHeight, fmtDate, fmtWhen, ageFrom } from './units.js';
 
-  let { person, oneditGarment, oneditVitals, oneditPerson } = $props();
+  let {
+    person,
+    oneditGarment = () => {},
+    oneditVitals = () => {},
+    oneditPerson = () => {},
+    onshare = () => {},
+    canShare = false,
+    readOnly = false,
+    units = null
+  } = $props();
+
+  // A shared view carries its own units; it must not read the visitor's.
+  const u = $derived(units ?? doc.units);
 
   let active = $state(null);
 
@@ -29,14 +41,29 @@
 <div class="stage" style:--pc={pc}>
   <header class="stage-head">
     <h1 class="stage-name">{person.name}</h1>
-    <button class="tag" onclick={oneditPerson}>
-      {#if age}<span>{age}</span><span class="rule"></span>{/if}
-      edit
-    </button>
+    {#if !readOnly}
+      <button class="tag" onclick={oneditPerson}>
+        {#if age}<span>{age}</span><span class="rule"></span>{/if}
+        edit
+      </button>
+    {:else if age}
+      <span class="stage-meta">{age}</span>
+    {/if}
+    {#if canShare && !readOnly}
+      <button class="tag" onclick={onshare} title="Give someone access to {person.name} alone">
+        share
+      </button>
+    {/if}
   </header>
 
   <div class="figure-box">
-    <Figure {person} {active} onactive={(id) => (active = id)} onpick={(id) => oneditGarment(id)} />
+    <Figure
+      {person}
+      {active}
+      {readOnly}
+      onactive={(id) => (active = id)}
+      onpick={(id) => oneditGarment(id)}
+    />
   </div>
 </div>
 
@@ -46,12 +73,16 @@
   {#each REGIONS as region (region.id)}
     {@const record = person[region.id]}
     {@const v = headline(record, region)}
-    {@const d = details(record, region, doc.units)}
-    <button
+    {@const d = details(record, region, u)}
+    <svelte:element
+      this={readOnly ? 'div' : 'button'}
       class="spec"
+      role={readOnly ? 'group' : undefined}
+      aria-label={readOnly ? `${region.label} for ${person.name}` : undefined}
+      class:readonly={readOnly}
       class:active={active === region.id}
       class:filled={hasSizes(person, region.id)}
-      onclick={() => oneditGarment(region.id)}
+      onclick={readOnly ? undefined : () => oneditGarment(region.id)}
       onpointerenter={() => (active = region.id)}
       onpointerleave={() => (active = null)}
       onfocus={() => (active = region.id)}
@@ -72,30 +103,33 @@
       <span class="spec-stamp">
         {#if record?.updated}
           {fmtWhen(record.updated)}
-          {#if (record.revisions ?? []).length}
+          {#if !readOnly && (record.revisions ?? []).length}
             <span class="revs">{record.revisions.length + 1} versions</span>
           {/if}
         {:else}
-          add
+          {readOnly ? '—' : 'add'}
         {/if}
       </span>
-    </button>
+    </svelte:element>
   {/each}
 
+  {#if !readOnly || person.vitals.length}
   <section class="vitals">
     <div class="vitals-head">
       <span class="eyebrow">Vitals</span>
-      <button class="btn ghost" style="height:26px;padding:0 9px" onclick={oneditVitals}>Add reading</button>
+      {#if !readOnly}
+        <button class="btn ghost" style="height:26px;padding:0 9px" onclick={oneditVitals}>Add reading</button>
+      {/if}
     </div>
 
     <div class="vitals-now">
       <div>
         <span class="eyebrow">Height</span>
-        <div class="n" class:empty={h == null}>{h == null ? 'not measured' : fmtHeight(h, doc.units)}</div>
+        <div class="n" class:empty={h == null}>{h == null ? 'not measured' : fmtHeight(h, u)}</div>
       </div>
       <div>
         <span class="eyebrow">Weight</span>
-        <div class="n" class:empty={w == null}>{w == null ? 'not weighed' : fmtMass(w, doc.units)}</div>
+        <div class="n" class:empty={w == null}>{w == null ? 'not weighed' : fmtMass(w, u)}</div>
       </div>
     </div>
 
@@ -104,9 +138,9 @@
         {#each marks as m (m.date)}
           <div class="mark">
             <span class="what">
-              {m.heightCm != null ? fmtHeight(m.heightCm, doc.units) : '—'}
-              {#if m.weightKg != null}<span style="color:var(--chalk-3)"> · {fmtMass(m.weightKg, doc.units)}</span>{/if}
-              {#if m.grew > 0}<span class="delta"> +{fmtLen(m.grew, doc.units)}</span>{/if}
+              {m.heightCm != null ? fmtHeight(m.heightCm, u) : '—'}
+              {#if m.weightKg != null}<span style="color:var(--chalk-3)"> · {fmtMass(m.weightKg, u)}</span>{/if}
+              {#if m.grew > 0}<span class="delta"> +{fmtLen(m.grew, u)}</span>{/if}
               {#if (m.revisions ?? []).length}<span class="amended" title="Corrected after it was first entered">amended</span>{/if}
             </span>
             <span class="when">
@@ -118,6 +152,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>

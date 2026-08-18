@@ -1,9 +1,11 @@
 <script>
   import { doc, ui, select, selected, chalkHex, specLine } from './lib/store.svelte.js';
-  import { pod, bootPod, applyIncoming, keepLocal } from './lib/solid.svelte.js';
+  import { pod, bootPod, applyIncoming, keepLocal, WHOLE, forPerson } from './lib/solid.svelte.js';
   import { fmtDate } from './lib/units.js';
   import { OUTLINE } from './lib/figure.js';
 
+  import { viewer, sharedUrlFromLocation, loadSharedView } from './lib/viewer.svelte.js';
+  import Viewer from './lib/Viewer.svelte';
   import Stage from './lib/Stage.svelte';
   import NestView from './lib/NestView.svelte';
   import LedgerView from './lib/LedgerView.svelte';
@@ -12,6 +14,7 @@
   import GarmentDialog from './lib/GarmentDialog.svelte';
   import VitalsDialog from './lib/VitalsDialog.svelte';
   import PodDialog from './lib/PodDialog.svelte';
+  import ShareDialog from './lib/ShareDialog.svelte';
 
   /* null = closed. Everything modal funnels through one variable so two
      dialogs can never be open at once. */
@@ -19,11 +22,27 @@
 
   const person = $derived(selected());
 
+  // A shared link is its own app: no pod, no stored wardrobe, nothing to save.
+  const sharedUrl = sharedUrlFromLocation();
+  if (sharedUrl) loadSharedView(sharedUrl);
+
   $effect(() => {
-    bootPod();
+    if (!viewer.active) bootPod();
+  });
+
+  // Nothing can be saved until a location is settled, so ask straight away
+  // rather than letting edits pile up with nowhere to go.
+  let askedWhere = false;
+  $effect(() => {
+    if (pod.needsLocation && !askedWhere) {
+      askedWhere = true;
+      modal = { kind: 'pod' };
+    }
+    if (!pod.needsLocation) askedWhere = false;
   });
 
   const podTag = $derived.by(() => {
+    if (pod.needsLocation) return { cls: 'bad', text: 'pick a folder', long: '' };
     if (pod.syncing) return { cls: 'busy', text: 'saving', long: ' to pod' };
     if (pod.state === 'on') return { cls: 'on', text: 'pod', long: ' connected' };
     if (pod.state === 'connecting') return { cls: 'busy', text: 'connecting', long: '' };
@@ -36,6 +55,9 @@
   }
 </script>
 
+{#if viewer.active}
+  <Viewer />
+{:else}
 <div class="shell">
   <header class="rail">
     <h1 class="wordmark"><span class="solid">Solid</span><span class="sil">Silhouettes</span></h1>
@@ -131,12 +153,15 @@
             oneditGarment={openGarment}
             oneditVitals={() => (modal = { kind: 'vitals' })}
             oneditPerson={() => (modal = { kind: 'person', person })}
+            onshare={() => (modal = { kind: 'share', scope: forPerson(person.id), title: person.name })}
+            canShare={pod.state === 'on' && !!pod.base}
           />
         {/if}
       </div>
     </main>
   </div>
 </div>
+{/if}
 
 {#if modal?.kind === 'person'}
   <PersonDialog person={modal.person} onclose={() => (modal = null)} />
@@ -145,7 +170,12 @@
 {:else if modal?.kind === 'vitals' && person}
   <VitalsDialog {person} onclose={() => (modal = null)} />
 {:else if modal?.kind === 'pod'}
-  <PodDialog onclose={() => (modal = null)} />
+  <PodDialog
+    onclose={() => (modal = null)}
+    onshare={() => (modal = { kind: 'share', scope: WHOLE, title: 'Everyone in the wardrobe' })}
+  />
+{:else if modal?.kind === 'share'}
+  <ShareDialog scope={modal.scope} title={modal.title} onclose={() => (modal = null)} />
 {/if}
 
 <!-- Two copies, both with real content. The person picks; nothing is merged

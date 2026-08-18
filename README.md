@@ -75,62 +75,137 @@ inventing a clock time for them.
 `localStorage` under `solidsilhouettes.doc.v1`, always. That copy is what makes
 the app work offline, and it is the only copy until you connect a pod.
 
-Connecting a pod adds a second home for the same document, as Turtle:
+### Where in the pod
+
+A pod is the person's storage, not the app's, so the app does not simply assume
+a folder. On connecting it looks, in order:
+
+1. **The profile's type index.** This is the Solid answer to "where does data of
+   this kind live": the WebID points at an index document, and the index maps an
+   RDF class to the resource holding it. If a `ss:Wardrobe` is registered, that
+   is the location, no questions asked.
+2. **Somewhere it already is** — a location remembered on this device, or the
+   folder earlier versions used.
+3. **Otherwise it asks**, prefilled with a suggestion, and registers the answer
+   in the private type index so the next app — or this one on another device —
+   can find it instead of guessing. If the profile has no type index at all, one
+   is created at `settings/privateTypeIndex.ttl` and linked from the profile.
+
+Finding the pod root itself is its own small problem: a profile *may* declare
+`pim:storage`, but a fresh Community Solid Server pod does not. So discovery
+falls back to walking up from the WebID document and taking the first container
+whose `Link` header claims `pim:Storage`. Falling back to the WebID's origin
+would hand back the whole server on a host that keeps many pods side by side.
+
+### The layout on disk
 
 ```
-<your pod>/solidsilhouettes/wardrobe.ttl
+<chosen folder>/
+    wardrobe.ttl        index: units, when it changed, who is in it
+    <person-id>.ttl     one document per person
 ```
+
+One document per person is not tidiness. Access control in Solid is granted per
+resource, so "let their optician read Devi's prescription, and nothing else" is
+only expressible if Devi is a resource of her own.
 
 - Sign-in is Solid-OIDC via `@inrupt/solid-client-authn-browser`. You are
   redirected to your own provider and back; this app never sees your password.
-  Sessions are restored on reload.
-- The pod URL comes from `pim:storage` in your WebID profile, falling back to the
-  origin of the WebID if the profile does not advertise one.
-- Local edits are pushed automatically, debounced to about a second, so a burst
-  of typing is one write.
+- Only the documents that actually changed are rewritten, so editing one person
+  does not rewrite the household.
+- A rewrite never deletes and recreates. Deleting would take the resource's ACL
+  with it and silently revoke everything shared from that document.
 - On connect, if both copies hold people and the pod's is more recent, you are
   asked which to keep. Nothing is merged behind your back.
-- A pod written by an earlier version still holds `wardrobe.json`. It is read in
-  once and the next save writes Turtle; the old file is left where it is.
+- A person document the pod will not hand over is counted and reported rather
+  than failing the whole read — you may have been given some and not others.
+- A pod written by an earlier version still holds `wardrobe.json`, or a single
+  `wardrobe.ttl` with everyone inside it. Both are read; the next save writes the
+  split layout. The old files are left where they are.
 - The Solid libraries are loaded lazily, only when you connect. A network problem
   or a provider outage cannot take the local app down with it.
 
-`ISSUERS` in `src/lib/solid.svelte.js` lists the providers offered, including
-`https://localhost:8443` for a local `node-solid-server`. Any provider address
-can be typed in instead.
+## Sharing
 
-### The RDF
+Access is granted per resource to a WebID, so there are two scopes:
 
-Everything is a named node — no blank nodes — so a revision or a prescription can
-be linked to, quoted and patched on its own. Where a published vocabulary says
-the thing plainly it is used (`vcard:fn`, `vcard:bday`, `dcterms:modified`); the
-rest is minted under `https://solidsilhouettes.app/ns#`, with the unit baked into
-the predicate so a number never needs a companion triple to be read correctly.
+- **One person** — Share on their page. Writes access on that one document.
+  Nobody else in the wardrobe comes with them.
+- **Everyone** — Share from the pod dialog. Writes access on the container, the
+  index, and every person document, so the grant is true rather than relying on
+  a server's inheritance rules.
 
-```turtle
-<>  a ss:Wardrobe ; ss:units "metric" ; ss:wearer <#p1> .
+Read-only and edit are both offered, and both are revocable. The app reads the
+current grants back from the pod rather than remembering what it set, so what
+you see is what the server actually enforces. Granting does not notify anyone:
+copy the address and send it however you like.
 
-<#p1> a ss:Wearer, vcard:Individual ;
-    vcard:fn "Devi" ; vcard:bday "2016-09-22"^^xsd:date ; ss:chalk "rose" ;
-    ss:garment <#p1-glasses> ; ss:reading <#p1-v-2026-08-01> .
+This uses `universalAccess` from `@inrupt/solid-client`, which speaks both WAC
+and ACP. A server supporting neither will say so instead of failing quietly.
 
-<#p1-glasses> a ss:Garment, ss:Eyewear ;
-    ss:piece "glasses" ; ss:labelSize "46-16-125" ; ss:pdMm 54.5 ;
-    ss:prescribedOn "2026-02-10"^^xsd:date ;
-    ss:rightEye <#p1-glasses-od> ; ss:leftEye <#p1-glasses-os> ;
-    dcterms:modified "2026-02-11T17:04:00Z"^^xsd:dateTime ;
-    ss:priorVersion <#p1-glasses-h0> .
+### A link anyone can open
 
-<#p1-glasses-od> a ss:Prescription ;
-    ss:sphere -1.75 ; ss:cylinder -0.5 ; ss:axis 175 .
+Solid authorises by WebID. Someone with no pod has none, so there is no bearer
+token to check and only one thing "viewable without signing in" can mean: the
+document is public. **Create a link** therefore publishes a *separate* copy at
+
+```
+<chosen folder>/shared/<random uuid>.ttl
 ```
 
-A revision node carries the same predicates as the record it belongs to, plus a
-`dcterms:date`, so one writer handles both. On a reading, the *absence* of
-`dcterms:created` is what means "no entry time was ever recorded".
+and grants public read on that one file. The link is the capability — it is a
+password in URL form, so anyone it reaches can read it, and it will sit in
+browser histories and referrer headers like any other URL.
 
-That namespace is minted by this app and is not dereferenceable. Anything that
-maps cleanly onto a published vocabulary should move to one.
+What that buys is precision about what leaks:
+
+- The real person documents and the wardrobe index stay private. Only the copy
+  is public, and it holds exactly what was shared.
+- The `shared/` container is not public, so nobody can list the links.
+- Height and weight are left out unless you tick the box, because the audience
+  is "anyone at all".
+- The copy is refreshed whenever the underlying records change, so a link does
+  not quietly serve last month's sizes. Links are matched to people by id, not
+  by name, so renaming someone does not orphan the link they are published in.
+  A link whose content would not change is not rewritten.
+- A link covers the people it was published for, and only those. Someone added
+  to the wardrobe later does not appear in an existing link, including one
+  created for "everyone" — a public link should never silently widen.
+- **Removing someone withdraws what was published about them.** If a link
+  covered only that person the file is deleted; if it covered several, they drop
+  out and the rest stay. Deleting someone locally while a public copy of them
+  carried on being readable would be the worst kind of quiet failure.
+- Withdrawing a link deletes the file. There is nothing left to read.
+
+Opening one puts the app in a view-only mode that reads that document and
+nothing else — it does not connect a pod, and it does not read or write the
+visitor's own wardrobe. That last part is deliberate: normalising and saving
+their stored copy back would look harmless while moving its timestamp forward,
+which could then win a conflict against their own pod.
+
+## What is and is not verified
+
+`test/` has the details. The RDF, the storage layout, and sharing are checked
+against a real Community Solid Server: writing and reading over HTTP, one person
+shared without leaking the others, read-only actually refusing writes, a rewrite
+keeping its ACL, revocation, and the type index being created and then found by
+a fresh client.
+
+The public link is checked end to end against the same server, including the
+part that matters: a plain unauthenticated fetch reads the link, while the same
+fetch is refused the private records, the wardrobe index, the `shared/` listing,
+and any attempt to write. A real browser then opens a published link in a
+profile that already holds its own wardrobe, and that wardrobe comes out
+byte-identical.
+
+The browser sign-in is verified as far as the authorization code: a real Chrome
+reaches the provider, logs in, consents, and returns to the app with a code. The
+token exchange after that fails against Community Solid Server 7, which rejects
+the auth library's dynamic client registration with
+`invalid_redirect_uri: redirect_uris must only contain strings`. The same code
+registers successfully against solidcommunity.net. Whether this is a bug in the
+library, in the server, or in how this app calls it is unresolved — treat
+browser sign-in against a local CSS as untested.
 
 ## Layout
 
@@ -147,6 +222,11 @@ src/
     Stage.svelte          one person: figure, spec cards, vitals
     store.svelte.js       the document, versioning, localStorage
     rdf.js                Turtle in and out (no runes; unit-testable)
+    typeindex.js          finding and registering the location in the pod
+    viewer.svelte.js      state for a shared link; never touches the store
+    Viewer.svelte         the read-only shell a link opens into
+    mode.js               decided before anything else: is this a shared view?
+    ShareDialog.svelte    granting and revoking access by WebID
     describe.js           records into words, for cards/history/ledger
     solid.svelte.js       pod auth and sync
     units.js              metric storage, imperial and optical display

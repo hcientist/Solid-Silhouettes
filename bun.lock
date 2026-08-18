@@ -6,7 +6,7 @@
       "name": "solid-silhouettes",
       "dependencies": {
         "@inrupt/solid-client": "^2.1.2",
-        "@inrupt/solid-client-authn-browser": "^2.3.0",
+        "@inrupt/solid-client-authn-browser": "^2.5.0",
       },
       "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.3",

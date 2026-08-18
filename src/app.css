@@ -1140,6 +1140,32 @@ input[type='number']::-webkit-inner-spin-button {
   padding-right: 42px;
 }
 
+.rule-line {
+  border: 0;
+  border-top: 1px solid var(--chalk-line);
+  margin: 2px 0;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--chalk-2);
+  cursor: pointer;
+}
+.check input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--tape);
+  cursor: pointer;
+}
+
+/* A spec card in a shared view states a fact; it does not invite a click. */
+.spec.readonly {
+  cursor: default;
+}
+
 /* Chalk colour picker */
 .chalks {
   display: flex;

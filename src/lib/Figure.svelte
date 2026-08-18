@@ -2,7 +2,7 @@
   import { VIEW, PIECES, NECK, SPECTACLES, GRAINLINE, NOTCHES, FLOOR, KEYS } from './figure.js';
   import { REGIONS, chalkHex, hasSizes } from './store.svelte.js';
 
-  let { person, active = null, onactive = () => {}, onpick = () => {} } = $props();
+  let { person, active = null, readOnly = false, onactive = () => {}, onpick = () => {} } = $props();
 
   const pc = $derived(chalkHex(person.chalk));
   const filled = $derived(Object.fromEntries(REGIONS.map((r) => [r.id, hasSizes(person, r.id)])));
@@ -83,19 +83,29 @@
        survives a change of person. -->
   <g>
     {#each REGIONS as r (r.id)}
-      <path
-        class="hit"
-        d={PIECES[r.id]}
-        role="button"
-        tabindex="0"
-        aria-label="{r.verb} for {person.name}"
-        onclick={() => onpick(r.id)}
-        onkeydown={(e) => keydown(e, r.id)}
-        onpointerenter={() => onactive(r.id)}
-        onpointerleave={() => onactive(null)}
-        onfocus={() => onactive(r.id)}
-        onblur={() => onactive(null)}
-      />
+      {#if readOnly}
+        <path
+          class="hit look"
+          d={PIECES[r.id]}
+          aria-hidden="true"
+          onpointerenter={() => onactive(r.id)}
+          onpointerleave={() => onactive(null)}
+        />
+      {:else}
+        <path
+          class="hit"
+          d={PIECES[r.id]}
+          role="button"
+          tabindex="0"
+          aria-label="{r.verb} for {person.name}"
+          onclick={() => onpick(r.id)}
+          onkeydown={(e) => keydown(e, r.id)}
+          onpointerenter={() => onactive(r.id)}
+          onpointerleave={() => onactive(null)}
+          onfocus={() => onactive(r.id)}
+          onblur={() => onactive(null)}
+        />
+      {/if}
       <path class="hit-ring" d={PIECES[r.id]} aria-hidden="true" />
     {/each}
   </g>

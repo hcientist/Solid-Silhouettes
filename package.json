@@ -15,6 +15,6 @@
   },
   "dependencies": {
     "@inrupt/solid-client": "^2.1.2",
-    "@inrupt/solid-client-authn-browser": "^2.3.0"
+    "@inrupt/solid-client-authn-browser": "^2.5.0"
   }
 }

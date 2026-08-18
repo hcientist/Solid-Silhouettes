@@ -1,5 +1,11 @@
-/* The pod copy is Turtle, not JSON: a wardrobe of people, each with
-   garments, readings, and the values those records used to hold.
+/* The pod copy is Turtle: an index that lists who is in the wardrobe, and
+   one document per person holding their garments, readings, and the values
+   those records used to hold.
+
+   One document per person is not tidiness — it is what makes sharing work.
+   Access control in Solid is granted per resource, so "let their optician
+   read Devi's prescription, and nothing else" is only expressible if Devi
+   is a resource of her own.
 
    Everything is a named node — no blank nodes — so a revision or a
    prescription can be linked to, quoted, and patched on its own. Where a
@@ -13,10 +19,12 @@ import { REGIONS, EYES, RX_FIELDS, regionById } from './regions.js';
 export const SS = 'https://solidsilhouettes.app/ns#';
 const VCARD = 'http://www.w3.org/2006/vcard/ns#';
 const DCT = 'http://purl.org/dc/terms/';
+const FOAF = 'http://xmlns.com/foaf/0.1/';
 const RDF_TYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
 
-const T = {
+export const T = {
   Wardrobe: SS + 'Wardrobe',
+  SharedView: SS + 'SharedView',
   Wearer: SS + 'Wearer',
   Individual: VCARD + 'Individual',
   Garment: SS + 'Garment',
@@ -44,6 +52,8 @@ const P = {
   weightKg: SS + 'weightKg',
   fn: VCARD + 'fn',
   bday: VCARD + 'bday',
+  primaryTopic: FOAF + 'primaryTopic',
+  creator: DCT + 'creator',
   created: DCT + 'created',
   modified: DCT + 'modified',
   date: DCT + 'date'
@@ -62,100 +72,140 @@ const asDate = (ymd) => new Date(`${ymd}T12:00:00.000Z`);
 const ymd = (d) => (d instanceof Date && !isNaN(d) ? d.toISOString().slice(0, 10) : '');
 const stamp = (d) => (d instanceof Date && !isNaN(d) ? d.toISOString() : null);
 
+/** Each person gets their own document, named for their id. */
+export const personDocUrl = (base, personId) => `${base.replace(/\/?$/, '/')}${personId}.ttl`;
+
 /* ---------------------------------------------------------------- write */
 
-export function buildDataset(client, snapshot, resourceUrl) {
+/** The index: units, when the wardrobe last changed, and who is in it. */
+export function buildIndex(client, snapshot, indexUrl, base) {
   const { createSolidDataset, createThing, buildThing, setThing } = client;
-  let ds = createSolidDataset();
 
-  // Absolute subjects throughout, so a link and the thing it points at
-  // always agree no matter how the file is later fetched.
-  const ref = (n) => `${resourceUrl}#${n}`;
-  const name = (n) => createThing({ url: ref(n) });
-  const put = (thing) => {
-    ds = setThing(ds, thing);
-  };
-
-  const wardrobe = buildThing(createThing({ url: resourceUrl }))
+  const wardrobe = buildThing(createThing({ url: indexUrl }))
     .addUrl(RDF_TYPE, T.Wardrobe)
     .addStringNoLocale(P.units, snapshot.units);
   if (snapshot.updatedAt) wardrobe.addDatetime(P.modified, new Date(snapshot.updatedAt));
 
   for (const person of snapshot.people) {
-    wardrobe.addUrl(P.wearer, ref(person.id));
+    wardrobe.addUrl(P.wearer, `${personDocUrl(base, person.id)}#${person.id}`);
+  }
+  return setThing(createSolidDataset(), wardrobe.build());
+}
 
-    const p = buildThing(name(person.id))
-      .addUrl(RDF_TYPE, T.Wearer)
-      .addUrl(RDF_TYPE, T.Individual)
-      .addStringNoLocale(P.fn, person.name)
-      .addStringNoLocale(P.chalk, person.chalk);
-    if (isSet(person.birthday)) p.addDate(P.bday, asDate(person.birthday));
-    if (person.added) p.addDatetime(P.created, new Date(person.added));
-    if (person.updated) p.addDatetime(P.modified, new Date(person.updated));
+/** A public, read-only copy of some of the wardrobe, whole in one document.
 
-    (person.revisions ?? []).forEach((rev, i) => {
-      const id = `${person.id}-h${i}`;
-      p.addUrl(P.priorVersion, ref(id));
-      const r = buildThing(name(id)).addUrl(RDF_TYPE, T.Revision).addDatetime(P.date, new Date(rev.at));
-      if (isSet(rev.name)) r.addStringNoLocale(P.fn, rev.name);
-      if (isSet(rev.chalk)) r.addStringNoLocale(P.chalk, rev.chalk);
-      if (isSet(rev.birthday)) r.addDate(P.bday, asDate(rev.birthday));
-      put(r.build());
-    });
+    It is a copy on purpose. The link has to be readable by someone with no
+    WebID, which in Solid means readable by everyone — so what goes public is
+    a separate document holding exactly what was shared, and the real records
+    and the wardrobe index stay private and untouched. */
+export function buildShare(client, docUrl, people, { units, sharedBy, at }) {
+  const { createSolidDataset, createThing, buildThing, setThing, getThingAll } = client;
+  let ds = createSolidDataset();
 
-    for (const region of REGIONS) {
-      const g = person[region.id];
-      if (!g?.updated) continue;
-      const gid = `${person.id}-${region.id}`;
-      p.addUrl(P.garment, ref(gid));
+  const view = buildThing(createThing({ url: docUrl }))
+    .addUrl(RDF_TYPE, T.Wardrobe)
+    .addUrl(RDF_TYPE, T.SharedView)
+    .addStringNoLocale(P.units, units)
+    .addDatetime(P.modified, new Date(at ?? Date.now()));
+  if (sharedBy) view.addUrl(P.creator, sharedBy);
 
-      const gt = buildThing(name(gid))
-        .addUrl(RDF_TYPE, T.Garment)
-        .addStringNoLocale(P.piece, region.id)
-        .addDatetime(P.modified, new Date(g.updated));
-      if (region.rx) gt.addUrl(RDF_TYPE, T.Eyewear);
-      writeValues(gt, region, g, gid, put, name, buildThing, ref);
-
-      (g.revisions ?? []).forEach((rev, i) => {
-        const rid = `${gid}-h${i}`;
-        gt.addUrl(P.priorVersion, ref(rid));
-        const rt = buildThing(name(rid))
-          .addUrl(RDF_TYPE, T.Revision)
-          .addStringNoLocale(P.piece, region.id)
-          .addDatetime(P.date, new Date(rev.at));
-        writeValues(rt, region, rev, rid, put, name, buildThing, ref);
-        put(rt.build());
-      });
-
-      put(gt.build());
+  for (const person of people) {
+    view.addUrl(P.wearer, `${docUrl}#${person.id}`);
+    // Everyone lands in this one document, which is the layout readWardrobe
+    // already handles; drop the per-document subject so there is one topic.
+    for (const t of getThingAll(buildPerson(client, person, docUrl, { topic: false }))) {
+      ds = setThing(ds, t);
     }
-
-    for (const v of person.vitals) {
-      const vid = `${person.id}-v-${v.date}`;
-      p.addUrl(P.reading, ref(vid));
-      const vt = buildThing(name(vid)).addUrl(RDF_TYPE, T.Reading).addDate(P.takenOn, asDate(v.date));
-      if (isSet(v.heightCm)) vt.addDecimal(P.heightCm, Number(v.heightCm));
-      if (isSet(v.weightKg)) vt.addDecimal(P.weightKg, Number(v.weightKg));
-      // An imported reading has no real entry time, so none is written and
-      // its absence on the way back in means the same thing.
-      if (v.recordedAt && !v.approx) vt.addDatetime(P.created, new Date(v.recordedAt));
-
-      (v.revisions ?? []).forEach((rev, i) => {
-        const rid = `${vid}-h${i}`;
-        vt.addUrl(P.priorVersion, ref(rid));
-        const rt = buildThing(name(rid)).addUrl(RDF_TYPE, T.Revision).addDatetime(P.date, new Date(rev.at));
-        if (isSet(rev.heightCm)) rt.addDecimal(P.heightCm, Number(rev.heightCm));
-        if (isSet(rev.weightKg)) rt.addDecimal(P.weightKg, Number(rev.weightKg));
-        put(rt.build());
-      });
-
-      put(vt.build());
-    }
-
-    put(p.build());
   }
 
-  put(wardrobe.build());
+  return setThing(ds, view.build());
+}
+
+/** One person, whole: their details, garments, prescriptions and readings. */
+export function buildPerson(client, person, docUrl, { topic = true } = {}) {
+  const { createSolidDataset, createThing, buildThing, setThing } = client;
+  let ds = createSolidDataset();
+
+  const ref = (n) => `${docUrl}#${n}`;
+  const name = (n) => createThing({ url: ref(n) });
+  const put = (thing) => {
+    ds = setThing(ds, thing);
+  };
+
+  // A recipient handed only this URL should land on the person, not guess.
+  if (topic) {
+    put(buildThing(createThing({ url: docUrl })).addUrl(P.primaryTopic, ref(person.id)).build());
+  }
+
+  const p = buildThing(name(person.id))
+    .addUrl(RDF_TYPE, T.Wearer)
+    .addUrl(RDF_TYPE, T.Individual)
+    .addStringNoLocale(P.fn, person.name)
+    .addStringNoLocale(P.chalk, person.chalk);
+  if (isSet(person.birthday)) p.addDate(P.bday, asDate(person.birthday));
+  if (person.added) p.addDatetime(P.created, new Date(person.added));
+  if (person.updated) p.addDatetime(P.modified, new Date(person.updated));
+
+  (person.revisions ?? []).forEach((rev, i) => {
+    const id = `${person.id}-h${i}`;
+    p.addUrl(P.priorVersion, ref(id));
+    const r = buildThing(name(id)).addUrl(RDF_TYPE, T.Revision).addDatetime(P.date, new Date(rev.at));
+    if (isSet(rev.name)) r.addStringNoLocale(P.fn, rev.name);
+    if (isSet(rev.chalk)) r.addStringNoLocale(P.chalk, rev.chalk);
+    if (isSet(rev.birthday)) r.addDate(P.bday, asDate(rev.birthday));
+    put(r.build());
+  });
+
+  for (const region of REGIONS) {
+    const g = person[region.id];
+    if (!g?.updated) continue;
+    const gid = `${person.id}-${region.id}`;
+    p.addUrl(P.garment, ref(gid));
+
+    const gt = buildThing(name(gid))
+      .addUrl(RDF_TYPE, T.Garment)
+      .addStringNoLocale(P.piece, region.id)
+      .addDatetime(P.modified, new Date(g.updated));
+    if (region.rx) gt.addUrl(RDF_TYPE, T.Eyewear);
+    writeValues(gt, region, g, gid, put, name, buildThing, ref);
+
+    (g.revisions ?? []).forEach((rev, i) => {
+      const rid = `${gid}-h${i}`;
+      gt.addUrl(P.priorVersion, ref(rid));
+      const rt = buildThing(name(rid))
+        .addUrl(RDF_TYPE, T.Revision)
+        .addStringNoLocale(P.piece, region.id)
+        .addDatetime(P.date, new Date(rev.at));
+      writeValues(rt, region, rev, rid, put, name, buildThing, ref);
+      put(rt.build());
+    });
+
+    put(gt.build());
+  }
+
+  for (const v of person.vitals) {
+    const vid = `${person.id}-v-${v.date}`;
+    p.addUrl(P.reading, ref(vid));
+    const vt = buildThing(name(vid)).addUrl(RDF_TYPE, T.Reading).addDate(P.takenOn, asDate(v.date));
+    if (isSet(v.heightCm)) vt.addDecimal(P.heightCm, Number(v.heightCm));
+    if (isSet(v.weightKg)) vt.addDecimal(P.weightKg, Number(v.weightKg));
+    // An imported reading has no real entry time, so none is written and
+    // its absence on the way back in means the same thing.
+    if (v.recordedAt && !v.approx) vt.addDatetime(P.created, new Date(v.recordedAt));
+
+    (v.revisions ?? []).forEach((rev, i) => {
+      const rid = `${vid}-h${i}`;
+      vt.addUrl(P.priorVersion, ref(rid));
+      const rt = buildThing(name(rid)).addUrl(RDF_TYPE, T.Revision).addDatetime(P.date, new Date(rev.at));
+      if (isSet(rev.heightCm)) rt.addDecimal(P.heightCm, Number(rev.heightCm));
+      if (isSet(rev.weightKg)) rt.addDecimal(P.weightKg, Number(rev.weightKg));
+      put(rt.build());
+    });
+
+    put(vt.build());
+  }
+
+  put(p.build());
   return ds;
 }
 
@@ -191,22 +241,52 @@ function writeValues(builder, region, values, ownerId, put, name, buildThing, re
 
 /* ----------------------------------------------------------------- read */
 
-export function readDataset(client, ds) {
-  const { getThingAll, getThing, getUrlAll, getStringNoLocale, getDecimal, getInteger, getDate, getDatetime } = client;
+/** Which documents a wardrobe index points into, so they can be fetched.
+    Returns [] for the older single-document layout, where the people are
+    already in the index itself. */
+export function wearerDocs(client, indexDs, indexUrl) {
+  const wardrobe = client
+    .getThingAll(indexDs)
+    .find((t) => client.getUrlAll(t, RDF_TYPE).includes(T.Wardrobe));
+  if (!wardrobe) return [];
+  const docs = new Set();
+  for (const url of client.getUrlAll(wardrobe, P.wearer)) {
+    const doc = url.split('#')[0];
+    if (doc && doc !== indexUrl) docs.add(doc);
+  }
+  return [...docs];
+}
 
-  const things = getThingAll(ds);
-  const wardrobe = things.find((t) => getUrlAll(t, RDF_TYPE).includes(T.Wardrobe));
+/** Reads across however many documents the wardrobe is spread over, so the
+    single-document layout and the split one come back the same shape. */
+export function readWardrobe(client, datasets) {
+  const { getThingAll, getThing, getUrlAll, getStringNoLocale, getDecimal, getInteger, getDate, getDatetime } = client;
+  const all = datasets.filter(Boolean);
+
+  let wardrobe = null;
+  for (const ds of all) {
+    wardrobe = getThingAll(ds).find((t) => getUrlAll(t, RDF_TYPE).includes(T.Wardrobe));
+    if (wardrobe) break;
+  }
   if (!wardrobe) return null;
 
-  const at = (url) => (url ? getThing(ds, url) : null);
+  /** A subject may live in any of the fetched documents; getThing gives
+      null for one that is not in a dataset, so the first hit wins. */
+  const at = (url) => {
+    if (!url) return null;
+    for (const ds of all) {
+      const t = getThing(ds, url);
+      if (t) return t;
+    }
+    return null;
+  };
   const str = (t, p) => (t ? getStringNoLocale(t, p) : null);
   const dec = (t, p) => (t ? getDecimal(t, p) : null);
-  const int = (t, p) => (t ? getInteger(t, p) : null);
 
   const people = [];
   for (const url of getUrlAll(wardrobe, P.wearer)) {
     const t = at(url);
-    if (!t) continue;
+    if (!t) continue; // a person we were not given access to, or could not fetch
 
     const person = {
       id: url.split('#').pop(),
@@ -238,12 +318,12 @@ export function readDataset(client, ds) {
       const region = regionById(str(g, P.piece));
       if (!region) continue;
 
-      const record = readValues(region, g, ds, client);
+      const record = readValues(region, g);
       record.updated = stamp(getDatetime(g, P.modified));
       record.revisions = getUrlAll(g, P.priorVersion)
-        .map((u) => at(u))
+        .map(at)
         .filter(Boolean)
-        .map((r) => ({ ...readValues(region, r, ds, client), at: stamp(getDatetime(r, P.date)) }))
+        .map((r) => ({ ...readValues(region, r), at: stamp(getDatetime(r, P.date)) }))
         .sort(byNewest);
       person[region.id] = record;
     }
@@ -261,7 +341,7 @@ export function readDataset(client, ds) {
         recordedAt: entered ?? `${date}T12:00:00.000Z`,
         approx: !entered,
         revisions: getUrlAll(v, P.priorVersion)
-          .map((u) => at(u))
+          .map(at)
           .filter(Boolean)
           .map((r) => ({
             at: stamp(getDatetime(r, P.date)),
@@ -277,13 +357,15 @@ export function readDataset(client, ds) {
   }
 
   return {
-    version: 2,
+    version: 3,
+    shared: getUrlAll(wardrobe, RDF_TYPE).includes(T.SharedView),
+    sharedBy: getUrlAll(wardrobe, P.creator)[0] ?? null,
     units: getStringNoLocale(wardrobe, P.units) === 'imperial' ? 'imperial' : 'metric',
     updatedAt: stamp(getDatetime(wardrobe, P.modified)) ?? new Date().toISOString(),
     people
   };
 
-  function readValues(region, t, ds2, c) {
+  function readValues(region, t) {
     const out = {
       size: str(t, P.labelSize) ?? '',
       brand: str(t, P.brand) ?? '',
@@ -297,8 +379,7 @@ export function readDataset(client, ds) {
     }
     if (region.rx) {
       for (const eye of EYES) {
-        const eurl = getUrlAll(t, eye.k === 'od' ? P.rightEye : P.leftEye)[0];
-        const e = eurl ? getThing(ds2, eurl) : null;
+        const e = at(getUrlAll(t, eye.k === 'od' ? P.rightEye : P.leftEye)[0]);
         out[eye.k] = {
           sph: e ? getDecimal(e, RX_PRED.sph) : null,
           cyl: e ? getDecimal(e, RX_PRED.cyl) : null,

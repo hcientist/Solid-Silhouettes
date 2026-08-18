@@ -1,4 +1,5 @@
 import { todayISO } from './units.js';
+import { SHARED_VIEW } from './mode.js';
 import {
   CHALKS,
   chalkHex,
@@ -271,8 +272,10 @@ function load() {
   }
 }
 
-load();
-if (!ui.selectedId) ui.selectedId = doc.people[0]?.id ?? null;
+if (!SHARED_VIEW) {
+  load();
+  if (!ui.selectedId) ui.selectedId = doc.people[0]?.id ?? null;
+}
 
 let onChange = null;
 /** The pod client registers here so the store never has to know it exists. */
@@ -281,7 +284,8 @@ export function watchDoc(fn) {
 }
 
 let lastSnap = null;
-$effect.root(() => {
+if (!SHARED_VIEW)
+  $effect.root(() => {
   $effect(() => {
     // Reading these is what subscribes us to every edit below them.
     const snap = JSON.stringify({ units: doc.units, people: doc.people });
@@ -295,5 +299,5 @@ $effect.root(() => {
       console.warn('Could not write the local copy', err);
     }
     if (!firstRun) onChange?.();
+    });
   });
-});
