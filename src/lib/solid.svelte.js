@@ -452,19 +452,41 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
 
   const token = crypto.randomUUID();
   const url = `${shareDirUrl()}${token}.ttl`;
+  /* Two different failures hide behind "would not publish": the copy may
+     never have been written, or it was written and the pod refused to make
+     it public. Say which, with the server's own words. */
+  let step = 'write';
   try {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     await writeDoc(client, fetch, url, rdf.buildShare(client, url, people, {
       units: doc.units, sharedBy: pod.webId, at: Date.now()
     }));
-    await client.universalAccess.setPublicAccess(url, { read: true, write: false, append: false }, { fetch });
+    step = 'public';
+    const granted = await client.universalAccess.setPublicAccess(
+      url, { read: true, write: false, append: false }, { fetch });
+    // null means solid-client could not find an access list it may edit.
+    if (!granted?.read) throw new Error('no editable access list for the copy');
     publishedHash.set(url, JSON.stringify({ units: doc.units, people }));
     await loadViewLinks();
     return { ok: true, url, link: linkFor(url) };
   } catch (err) {
-    console.warn(err);
-    return { ok: false, error: 'The pod would not publish that. It has to allow public read on a single file.' };
+    console.warn('view link failed at', step, url, err);
+    const why = err?.message ? ` (${err.message})` : '';
+    if (step === 'write') {
+      return { ok: false, error: `The pod would not take the shared copy${why}.` };
+    }
+    // Leave nothing private-but-orphaned behind in the share folder.
+    try {
+      const { authn, client } = await libs();
+      await client.deleteSolidDataset(url, { fetch: authn.fetch });
+    } catch {
+      /* best effort */
+    }
+    return {
+      ok: false,
+      error: `The copy was written, but the pod would not make it public${why}. It has to allow public read on a single file.`
+    };
   }
 }
 
