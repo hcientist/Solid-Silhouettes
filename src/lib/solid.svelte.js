@@ -459,9 +459,13 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
   try {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
-    await writeDoc(client, fetch, url, rdf.buildShare(client, url, people, {
+    await ensureShareDir(client, fetch);
+    // The address is brand new, so there is nothing to read first. Asking
+    // anyway is not harmless: Nextcloud's Solid server answers 403, not 404,
+    // for a file that does not exist yet.
+    await client.saveSolidDatasetAt(url, rdf.buildShare(client, url, people, {
       units: doc.units, sharedBy: pod.webId, at: Date.now()
-    }));
+    }), { fetch });
     step = 'public';
     const granted = await client.universalAccess.setPublicAccess(
       url, { read: true, write: false, append: false }, { fetch });
@@ -487,6 +491,23 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
       ok: false,
       error: `The copy was written, but the pod would not make it public${why}. It has to allow public read on a single file.`
     };
+  }
+}
+
+/* The spec has a server create missing parent folders on write, but not
+   every server does — Nextcloud's refuses a path under a folder that is not
+   there. So make the share folder outright the first time it is needed. */
+async function ensureShareDir(client, fetch) {
+  try {
+    await client.getSolidDataset(shareDirUrl(), { fetch });
+    return;
+  } catch {
+    /* missing, or a server that says 403 for missing: try to create it */
+  }
+  try {
+    await client.createContainerAt(shareDirUrl(), { fetch });
+  } catch {
+    /* already there after all; the write that follows reports anything real */
   }
 }
 
