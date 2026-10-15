@@ -10,8 +10,13 @@ const INDEX_FILE = 'wardrobe.ttl';
 /** Written by versions before the move to RDF; read once, then left alone. */
 const LEGACY_FILE = 'wardrobe.json';
 const DEFAULT_DIR = 'solidsilhouettes/';
-/** Public read-only copies live here, apart from the private records. */
-const SHARE_DIR = 'shared/';
+/** Public read-only copies sit beside the private records, named apart from
+    them. They used to have a folder of their own, and links made then are
+    still listed, but Nextcloud's Solid server will not write into a
+    subfolder the app creates, and a file in a folder that already works
+    needs nothing new from the server. */
+const SHARE_PREFIX = 'shared-';
+const LEGACY_SHARE_DIR = 'shared/';
 
 export const ISSUERS = [
   { who: 'Solid Community', url: 'https://solidcommunity.net' },
@@ -439,7 +444,9 @@ export async function push() {
    separate copy holding only what was shared. The real records never become
    public, and revoking is deleting one file. */
 
-export const shareDirUrl = () => (pod.base ? pod.base + SHARE_DIR : null);
+const isShareCopy = (url) =>
+  url.endsWith('.ttl') &&
+  (url.slice(url.lastIndexOf('/') + 1).startsWith(SHARE_PREFIX) || url.startsWith(pod.base + LEGACY_SHARE_DIR));
 
 const linkFor = (docUrl) =>
   `${window.location.origin}${window.location.pathname}?view=${encodeURIComponent(docUrl)}`;
@@ -451,7 +458,7 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
   if (!people.length) return { ok: false, error: 'There is nobody to share.' };
 
   const token = crypto.randomUUID();
-  const url = `${shareDirUrl()}${token}.ttl`;
+  const url = `${pod.base}${SHARE_PREFIX}${token}.ttl`;
   /* Two different failures hide behind "would not publish": the copy may
      never have been written, or it was written and the pod refused to make
      it public. Say which, with the server's own words. */
@@ -459,7 +466,6 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
   try {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
-    await ensureShareDir(client, fetch);
     // The address is brand new, so there is nothing to read first. Asking
     // anyway is not harmless: Nextcloud's Solid server answers 403, not 404,
     // for a file that does not exist yet.
@@ -494,31 +500,21 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
   }
 }
 
-/* The spec has a server create missing parent folders on write, but not
-   every server does — Nextcloud's refuses a path under a folder that is not
-   there. So make the share folder outright the first time it is needed. */
-async function ensureShareDir(client, fetch) {
-  try {
-    await client.getSolidDataset(shareDirUrl(), { fetch });
-    return;
-  } catch {
-    /* missing, or a server that says 403 for missing: try to create it */
-  }
-  try {
-    await client.createContainerAt(shareDirUrl(), { fetch });
-  } catch {
-    /* already there after all; the write that follows reports anything real */
-  }
-}
-
 /** Every link currently live, read from the pod rather than remembered here. */
 export async function loadViewLinks() {
   if (pod.state !== 'on' || !pod.base) return;
   try {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
-    const dir = await client.getSolidDataset(shareDirUrl(), { fetch });
-    const urls = client.getContainedResourceUrlAll(dir).filter((u) => u.endsWith('.ttl'));
+    const urls = [];
+    for (const dirUrl of [pod.base, pod.base + LEGACY_SHARE_DIR]) {
+      try {
+        const dir = await client.getSolidDataset(dirUrl, { fetch });
+        urls.push(...client.getContainedResourceUrlAll(dir).filter(isShareCopy));
+      } catch {
+        /* no legacy folder is the usual case */
+      }
+    }
     const out = [];
     for (const url of urls) {
       try {

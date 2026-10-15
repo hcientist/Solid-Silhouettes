@@ -150,10 +150,13 @@ token to check and only one thing "viewable without signing in" can mean: the
 document is public. **Create a link** therefore publishes a *separate* copy at
 
 ```
-<chosen folder>/shared/<random uuid>.ttl
+<chosen folder>/shared-<random uuid>.ttl
 ```
 
-and grants public read on that one file. The link is the capability — it is a
+and grants public read on that one file. It sits beside the private records
+rather than in a folder of its own because Nextcloud's Solid server refuses
+writes into a subfolder the app creates; links made earlier under `shared/`
+are still listed and kept fresh. The link is the capability — it is a
 password in URL form, so anyone it reaches can read it, and it will sit in
 browser histories and referrer headers like any other URL.
 
@@ -161,7 +164,7 @@ What that buys is precision about what leaks:
 
 - The real person documents and the wardrobe index stay private. Only the copy
   is public, and it holds exactly what was shared.
-- The `shared/` container is not public, so nobody can list the links.
+- The folder is not public, so nobody can list the links.
 - Height and weight are left out unless you tick the box, because the audience
   is "anyone at all".
 - The copy is refreshed whenever the underlying records change, so a link does
