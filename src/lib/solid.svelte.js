@@ -6,6 +6,7 @@ import { doc, snapshot, replaceDoc, watchDoc } from './store.svelte.js';
 
 const WANTED = 'solidsilhouettes.pod.wanted';
 const LOCATION = 'solidsilhouettes.pod.location';
+const SYNCED = 'solidsilhouettes.pod.synced';
 const INDEX_FILE = 'wardrobe.ttl';
 /** Written by versions before the move to RDF; read once, then left alone. */
 const LEGACY_FILE = 'wardrobe.json';
@@ -270,8 +271,28 @@ async function registerLocation() {
 
 /* --------------------------------------------------------------- syncing */
 
-/* On connecting, whichever copy was edited most recently wins — unless
-   both have real content, in which case the person decides. */
+/* The device remembers which version it last agreed with the pod on, so on
+   the next connect it can tell its own edits from someone else's. */
+function syncedAt() {
+  try {
+    const mark = JSON.parse(localStorage.getItem(SYNCED) ?? 'null');
+    return mark?.url === pod.indexUrl ? Date.parse(mark.at) || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function markSynced(at = doc.updatedAt) {
+  try {
+    localStorage.setItem(SYNCED, JSON.stringify({ url: pod.indexUrl, at }));
+  } catch {
+    /* storage unavailable: the next connect asks instead */
+  }
+}
+
+/* On connecting, a copy nobody touched since the last sync gives way to the
+   other. Only when both changed does the person decide; with no record of
+   the last sync, the most recent edit wins unless both have real content. */
 async function firstSync() {
   loadViewLinks();
   const remote = await pull({ quiet: true });
@@ -287,7 +308,14 @@ async function firstSync() {
 
   const rt = Date.parse(remote.updatedAt ?? 0) || 0;
   const lt = Date.parse(doc.updatedAt ?? 0) || 0;
-  if (rt > lt) pod.incoming = remote;
+  const mark = syncedAt();
+  if (mark !== null) {
+    const localChanged = lt > mark;
+    const remoteChanged = rt !== mark;
+    if (!localChanged) return void (rt === lt ? rememberPushed() : applyIncoming(remote));
+    if (!remoteChanged) return void (await push());
+  }
+  if (rt > lt || mark !== null) pod.incoming = remote;
   else await push();
 }
 
@@ -296,6 +324,7 @@ export function applyIncoming(remote) {
   pod.incoming = null;
   pod.lastSync = new Date().toISOString();
   rememberPushed(); // it came from the pod, so nothing needs sending back
+  markSynced();
 }
 
 export async function keepLocal() {
@@ -423,6 +452,7 @@ export async function push() {
       pushedIndex = key;
     }
 
+    markSynced(snap.updatedAt);
     await refreshViewLinks();
 
     pod.lastSync = new Date().toISOString();

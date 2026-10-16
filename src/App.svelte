@@ -175,7 +175,7 @@
     onshare={() => (modal = { kind: 'share', scope: WHOLE, title: 'Everyone in the wardrobe' })}
   />
 {:else if modal?.kind === 'share'}
-  <ShareDialog scope={modal.scope} title={modal.title} onclose={() => (modal = null)} />
+  <ShareDialog scope={modal?.scope} title={modal?.title} onclose={() => (modal = null)} />
 {/if}
 
 <!-- Two copies, both with real content. The person picks; nothing is merged

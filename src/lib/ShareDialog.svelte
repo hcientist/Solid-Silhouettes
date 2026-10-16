@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from 'svelte';
   import Dialog from './Dialog.svelte';
   import {
     pod, scopeUrl, readAccess, setAccess, WHOLE,
@@ -6,7 +7,10 @@
   } from './solid.svelte.js';
   import { fmtDate } from './units.js';
 
-  let { scope, title, onclose } = $props();
+  let { scope: scopeProp, title, onclose } = $props();
+  // Fixed for the dialog's life. Grants finish after it may have closed,
+  // and by then the caller's modal state is gone.
+  const scope = untrack(() => scopeProp);
 
   let entries = $state([]);
   let loading = $state(true);
@@ -23,7 +27,7 @@
   let fresh = $state(null);
 
   const url = $derived(scopeUrl(scope));
-  const whole = $derived(scope.kind === 'all');
+  const whole = scope.kind === 'all';
 
   async function refresh() {
     loading = true;
@@ -33,9 +37,12 @@
     loading = false;
   }
 
+  // Once on open. Untracked, or every pod write would reload the list.
   $effect(() => {
-    refresh();
-    loadViewLinks();
+    untrack(() => {
+      refresh();
+      loadViewLinks();
+    });
   });
 
   async function makeLink() {

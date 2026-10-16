@@ -253,12 +253,27 @@ export function snapshot() {
   };
 }
 
-export function replaceDoc(incoming) {
+let lastSnap = null;
+const contentKey = () => JSON.stringify({ units: doc.units, people: doc.people });
+
+function save() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(snapshot()));
+  } catch (err) {
+    console.warn('Could not write the local copy', err);
+  }
+}
+
+/* Taking in a copy from elsewhere is not an edit: it keeps that copy's
+   timestamp and is not sent back to where it came from. */
+export function replaceDoc(incoming, { persist = true } = {}) {
   if (!incoming || !Array.isArray(incoming.people)) return false;
   doc.units = incoming.units === 'imperial' ? 'imperial' : 'metric';
   doc.people = incoming.people.map(normalisePerson);
   doc.updatedAt = incoming.updatedAt ?? new Date().toISOString();
   if (!doc.people.some((p) => p.id === ui.selectedId)) ui.selectedId = doc.people[0]?.id ?? null;
+  lastSnap = contentKey();
+  if (persist) save();
   return true;
 }
 
@@ -266,7 +281,7 @@ function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return;
-    replaceDoc(JSON.parse(raw));
+    replaceDoc(JSON.parse(raw), { persist: false });
   } catch (err) {
     console.warn('Could not read the local copy', err);
   }
@@ -283,21 +298,16 @@ export function watchDoc(fn) {
   onChange = fn;
 }
 
-let lastSnap = null;
 if (!SHARED_VIEW)
   $effect.root(() => {
   $effect(() => {
     // Reading these is what subscribes us to every edit below them.
-    const snap = JSON.stringify({ units: doc.units, people: doc.people });
+    const snap = contentKey();
     if (snap === lastSnap) return;
     const firstRun = lastSnap === null;
     lastSnap = snap;
     if (!firstRun) doc.updatedAt = new Date().toISOString();
-    try {
-      localStorage.setItem(KEY, JSON.stringify(snapshot()));
-    } catch (err) {
-      console.warn('Could not write the local copy', err);
-    }
+    save();
     if (!firstRun) onChange?.();
     });
   });
