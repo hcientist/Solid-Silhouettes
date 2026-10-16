@@ -961,6 +961,10 @@ dialog[open] {
 .dlg-body {
   padding: 16px;
   display: grid;
+  /* One column that can shrink: a long pod address must wrap or truncate,
+     not widen the grid and scroll the ticket sideways. */
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: hidden;
   gap: 14px;
   max-height: min(70dvh, 560px);
   overflow-y: auto;
@@ -978,6 +982,7 @@ dialog[open] {
 
 .field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .field > label,
@@ -1197,6 +1202,7 @@ input[type='number']::-webkit-inner-spin-button {
   line-height: 1.6;
   color: var(--chalk-3);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .hint a {
   color: var(--chalk-2);
@@ -1219,6 +1225,7 @@ input[type='number']::-webkit-inner-spin-button {
 
 .issuers {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .issuer {
@@ -1246,6 +1253,9 @@ input[type='number']::-webkit-inner-spin-button {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--chalk-3);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 /* ============================================================
