@@ -537,12 +537,15 @@ export async function loadViewLinks() {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     const urls = [];
-    for (const dirUrl of [pod.base, pod.base + LEGACY_SHARE_DIR]) {
+    const dirs = [pod.base];
+    for (let i = 0; i < dirs.length; i++) {
       try {
-        const dir = await client.getSolidDataset(dirUrl, { fetch });
-        urls.push(...client.getContainedResourceUrlAll(dir).filter(isShareCopy));
+        const contained = client.getContainedResourceUrlAll(await client.getSolidDataset(dirs[i], { fetch }));
+        urls.push(...contained.filter(isShareCopy));
+        // Older versions kept copies in a subfolder; look only if it is there.
+        if (i === 0 && contained.includes(pod.base + LEGACY_SHARE_DIR)) dirs.push(pod.base + LEGACY_SHARE_DIR);
       } catch {
-        /* no legacy folder is the usual case */
+        /* unreadable: nothing to list */
       }
     }
     const out = [];
