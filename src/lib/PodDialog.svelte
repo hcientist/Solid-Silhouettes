@@ -97,7 +97,12 @@
         </div>
       {/if}
 
-      {#if pod.unreadable}
+      {#if !pod.indexWritable}
+        <div class="notice">
+          This wardrobe belongs to someone else. You see the people they shared
+          with you, and your changes to them are saved to their pod.
+        </div>
+      {:else if pod.unreadable}
         <div class="notice">
           {pod.unreadable}
           {pod.unreadable === 1 ? 'person document' : 'person documents'} in the index

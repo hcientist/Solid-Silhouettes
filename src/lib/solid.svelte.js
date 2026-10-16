@@ -7,6 +7,7 @@ import { doc, snapshot, replaceDoc, watchDoc } from './store.svelte.js';
 const WANTED = 'solidsilhouettes.pod.wanted';
 const LOCATION = 'solidsilhouettes.pod.location';
 const SYNCED = 'solidsilhouettes.pod.synced';
+const PERSON_DOC = /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.ttl$/i;
 const INDEX_FILE = 'wardrobe.ttl';
 /** Written by versions before the move to RDF; read once, then left alone. */
 const LEGACY_FILE = 'wardrobe.json';
@@ -52,7 +53,9 @@ export const pod = $state({
   /** public read-only links currently published */
   viewLinks: [],
   /** set when the pod holds a newer copy than this device */
-  incoming: null
+  incoming: null,
+  /** false when this WebID may read the wardrobe but not change its list */
+  indexWritable: true
 });
 
 let authn = null;
@@ -132,7 +135,7 @@ export async function disconnect() {
     state: 'off', webId: null, podUrl: null, base: null, indexUrl: null, legacyUrl: null,
     needsLocation: false, suggested: null, foundVia: null, registered: null,
     error: null, syncing: false, lastSync: null, unreadable: 0, migrated: false,
-    viewLinks: [], incoming: null
+    viewLinks: [], incoming: null, indexWritable: true
   });
 }
 
@@ -224,6 +227,7 @@ async function exists(url, fetch) {
 
 function setLocation(indexUrl, via) {
   pod.indexUrl = indexUrl;
+  pod.indexWritable = true;
   pod.base = indexUrl.slice(0, indexUrl.lastIndexOf('/') + 1);
   pod.legacyUrl = pod.base + LEGACY_FILE;
   pod.foundVia = via;
@@ -241,6 +245,9 @@ export function normaliseLocation(input) {
     return null;
   }
   if (!/\.(ttl|jsonld|nq|trig)$/i.test(url)) url = asContainer(url) + INDEX_FILE;
+  // A person's own document (the address a single-person share used to show)
+  // lives beside the index, so open the wardrobe it belongs to.
+  else if (PERSON_DOC.test(url)) url = url.slice(0, url.lastIndexOf('/') + 1) + INDEX_FILE;
   return url;
 }
 
@@ -300,6 +307,8 @@ async function firstSync() {
     await push(); // nothing there yet: seed the pod with this device
     return;
   }
+  if (!pod.indexWritable) return void applyIncoming(remote);
+
   const localHas = doc.people.length > 0;
   const remoteHas = Array.isArray(remote.people) && remote.people.length > 0;
 
@@ -342,6 +351,7 @@ export async function pull({ quiet = false } = {}) {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     const indexDs = await client.getSolidDataset(pod.indexUrl, { fetch });
+    pod.indexWritable = client.getEffectiveAccess(indexDs).user.write !== false;
 
     // One document per person, so fetch the ones this index points at.
     const datasets = [indexDs];
@@ -426,10 +436,18 @@ export async function push() {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     const snap = snapshot();
+    // In a wardrobe shared with us person by person, the list is not ours:
+    // edit the people we were given, but add or remove nobody.
+    const ownsList = pod.indexWritable;
+    let outOfReach = 0;
 
     for (const person of snap.people) {
       const json = JSON.stringify(person);
       if (pushedPeople.get(person.id) === json) continue;
+      if (!ownsList && !pushedPeople.has(person.id)) {
+        outOfReach++;
+        continue;
+      }
       const url = rdf.personDocUrl(pod.base, person.id);
       await writeDoc(client, fetch, url, rdf.buildPerson(client, person, url));
       pushedPeople.set(person.id, json);
@@ -438,6 +456,10 @@ export async function push() {
     const living = new Set(snap.people.map((p) => p.id));
     for (const id of [...pushedPeople.keys()]) {
       if (living.has(id)) continue;
+      if (!ownsList) {
+        outOfReach++;
+        continue;
+      }
       try {
         await client.deleteSolidDataset(rdf.personDocUrl(pod.base, id), { fetch });
       } catch {
@@ -447,7 +469,7 @@ export async function push() {
     }
 
     const key = indexKey(snap);
-    if (key !== pushedIndex) {
+    if (ownsList && key !== pushedIndex) {
       await writeDoc(client, fetch, pod.indexUrl, rdf.buildIndex(client, snap, pod.indexUrl, pod.base));
       pushedIndex = key;
     }
@@ -457,7 +479,9 @@ export async function push() {
 
     pod.lastSync = new Date().toISOString();
     pod.migrated = false;
-    pod.error = null;
+    pod.error = outOfReach
+      ? 'Only the people shared with you are saved here. Adding or removing people is up to whoever owns this wardrobe.'
+      : null;
   } catch (err) {
     fail(err, 'The pod did not accept the save. Check you are still signed in, then try again.', true);
   } finally {
@@ -698,6 +722,7 @@ export async function setAccess(scope, webId, level) {
       if (!url) continue;
       await client.universalAccess.setAgentAccess(url, id, modes, { fetch });
     }
+    if (scope.kind === 'person') await indexAccessFor(client, fetch, id, scope.id, level !== 'none');
     return { ok: true };
   } catch (err) {
     console.warn(err);
@@ -706,6 +731,29 @@ export async function setAccess(scope, webId, level) {
       error: 'The pod refused the change. You need control of the resource, and the server has to support setting access.'
     };
   }
+}
+
+/* The index holds only the people's opaque document links, so reading it
+   tells a person-only recipient how many people there are and nothing
+   else. Without it they could not open the wardrobe at all. It never
+   becomes writable this way: whoever holds only some people must not
+   rewrite the list. */
+async function indexAccessFor(client, fetch, webId, personId, granted) {
+  if (granted) {
+    // Partial modes merge, so whole-wardrobe edit access is left alone.
+    await client.universalAccess.setAgentAccess(pod.indexUrl, webId, { read: true }, { fetch });
+    return;
+  }
+  const others = [pod.base, ...doc.people.filter((p) => p.id !== personId).map((p) => `${pod.base}${p.id}.ttl`)];
+  // A few at a time: each check is several requests, and a server swamped
+  // with them starts failing. Any answer that is not a clear "no" keeps it.
+  for (let i = 0; i < others.length; i += 4) {
+    const access = await Promise.all(
+      others.slice(i, i + 4).map((url) => client.universalAccess.getAgentAccess(url, webId, { fetch }).catch(() => null))
+    );
+    if (access.some((a) => a === null || a.read)) return;
+  }
+  await client.universalAccess.setAgentAccess(pod.indexUrl, webId, MODES.none, { fetch });
 }
 
 function isMissing(err) {

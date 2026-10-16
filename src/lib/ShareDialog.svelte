@@ -26,7 +26,8 @@
   let linkError = $state(null);
   let fresh = $state(null);
 
-  const url = $derived(scopeUrl(scope));
+  // Recipients always open the folder; a person share shows them just that person.
+  const url = $derived(scopeUrl(WHOLE));
   const whole = scope.kind === 'all';
 
   async function refresh() {
