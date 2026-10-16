@@ -125,6 +125,34 @@ ok(`PD stays mm under imperial  (${imp.detail})`, imp.detail.includes('PD 54.5 m
 ok('rx stays in dioptres under imperial', imp.detail.includes('-1.75 -0.50 ×175'));
 await p.evaluate(() => [...document.querySelectorAll('.unit-toggle button')][0].click());
 
+// --- long pod addresses stay inside the dialog ---
+// Bug: a long address in a field widened the dialog's grid, so the body
+// scrolled sideways and its left edge was cut off. The pod dialog's folder
+// form needs a signed-in pod, so put the same content (an input holding an
+// address, a hint quoting it, an issuer row) into an open dialog instead.
+const LONG = 'https://nextcloud.example.org/apps/solid/~someone-with-a-rather-long-name/storage/solidsilhouettes/wardrobe.ttl';
+for (const width of [1440, 390]) {
+  await p.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+  await p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /^edit$/i.test(x.textContent.trim())).click()); await wait(400);
+  const overflow = await p.evaluate((long) => {
+    const body = document.querySelector('dialog[open] .dlg-body');
+    if (!body) return 'no dialog';
+    const field = document.createElement('div');
+    field.className = 'field';
+    field.innerHTML = `<label>Folder</label><input type="text" value="${long}"><p class="hint">Index goes at <span class="mono">${long}</span></p>`;
+    const issuers = document.createElement('div');
+    issuers.className = 'issuers';
+    issuers.innerHTML = `<button class="issuer"><span class="who">Use the usual folder</span><span class="url">${long.replace(/^https?:\/\//, '')}</span></button>`;
+    body.prepend(field, issuers);
+    field.querySelector('input').focus();
+    field.querySelector('input').setSelectionRange(long.length, long.length);
+    return { scroll: body.scrollWidth - body.clientWidth, left: body.scrollLeft };
+  }, LONG);
+  ok(`dialog does not scroll sideways at ${width}px  (${JSON.stringify(overflow)})`, overflow.scroll <= 0 && overflow.left === 0);
+  await p.keyboard.press('Escape'); await wait(300);
+}
+await p.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 });
+
 // --- persistence ---
 await p.reload({ waitUntil: 'networkidle0' }); await wait(700);
 ok('everything persisted', await p.evaluate(() => {

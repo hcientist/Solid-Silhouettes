@@ -9,6 +9,7 @@ bun add -d puppeteer-core @solid/community-server
 
 ```
 bun test/rdf.test.mjs        # no server needed
+bun --preload ./test/svelte-modules.mjs test/sync.test.mjs   # no server needed
 bun test/live-pod.test.mjs   # needs a server on :3111 (see below)
 bun test/storage.test.mjs    # needs a server on :3111
 ```
@@ -44,3 +45,12 @@ the store normalising and re-saving on import in view mode.
 `link-refresh.test.mjs` covers the lifecycle of a published copy: an edit
 reaching it, unrelated links being left alone, a rename not orphaning it, and a
 removed person taking their published copy with them.
+
+`sync.test.mjs` runs the app's own runes modules (`*.svelte.js`), which
+`svelte-modules.mjs` compiles on import the way the Vite plugin does. It covers
+the decisions syncing and sharing make: that a copy pulled from the pod is not
+an edit, which copy wins on connect, what a push may create or delete in a
+wardrobe shared person by person, when index access is taken back, and how a
+pasted address is read. Each check names the bug it would have caught and, where
+the behaviour rests on one, the Web Access Control, Solid Protocol or LDP
+requirement it follows.

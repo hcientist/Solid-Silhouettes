@@ -307,25 +307,34 @@ async function firstSync() {
     await push(); // nothing there yet: seed the pod with this device
     return;
   }
-  if (!pod.indexWritable) return void applyIncoming(remote);
+  const action = syncDecision({ remote, local: doc, mark: syncedAt(), indexWritable: pod.indexWritable });
+  if (action === 'apply') applyIncoming(remote);
+  else if (action === 'remember') rememberPushed();
+  else if (action === 'ask') pod.incoming = remote;
+  else await push();
+}
 
-  const localHas = doc.people.length > 0;
+/** What connecting should do with the pod's copy (remote) and this device's
+    (local): 'push', 'apply' the pod's, 'remember' that they already agree,
+    or 'ask' the person. mark is when the two last agreed, or null. */
+export function syncDecision({ remote, local, mark, indexWritable }) {
+  // Someone holding only part of a wardrobe takes the pod's copy, never pushes theirs over it.
+  if (!indexWritable) return 'apply';
+
+  const localHas = local.people.length > 0;
   const remoteHas = Array.isArray(remote.people) && remote.people.length > 0;
-
-  if (!remoteHas) return void (await push());
-  if (!localHas) return void applyIncoming(remote);
+  if (!remoteHas) return 'push';
+  if (!localHas) return 'apply';
 
   const rt = Date.parse(remote.updatedAt ?? 0) || 0;
-  const lt = Date.parse(doc.updatedAt ?? 0) || 0;
-  const mark = syncedAt();
+  const lt = Date.parse(local.updatedAt ?? 0) || 0;
   if (mark !== null) {
     const localChanged = lt > mark;
     const remoteChanged = rt !== mark;
-    if (!localChanged) return void (rt === lt ? rememberPushed() : applyIncoming(remote));
-    if (!remoteChanged) return void (await push());
+    if (!localChanged) return rt === lt ? 'remember' : 'apply';
+    if (!remoteChanged) return 'push';
   }
-  if (rt > lt || mark !== null) pod.incoming = remote;
-  else await push();
+  return rt > lt || mark !== null ? 'ask' : 'push';
 }
 
 export function applyIncoming(remote) {
@@ -397,6 +406,28 @@ async function pullLegacy() {
 
 /* Only the documents that actually changed get written, so editing one
    person does not rewrite the whole household. */
+
+/** Which person documents a push writes and deletes. pushed maps id to the
+    JSON last written. In a wardrobe shared with us person by person the list
+    is not ours (ownsList false): edit the people we were given, but add or
+    remove nobody; those changes are counted in outOfReach instead. */
+export function planPush(people, pushed, ownsList) {
+  const write = [];
+  const remove = [];
+  let outOfReach = 0;
+  for (const person of people) {
+    if (pushed.get(person.id) === JSON.stringify(person)) continue;
+    if (!ownsList && !pushed.has(person.id)) outOfReach++;
+    else write.push(person);
+  }
+  const living = new Set(people.map((p) => p.id));
+  for (const id of pushed.keys()) {
+    if (living.has(id)) continue;
+    if (!ownsList) outOfReach++;
+    else remove.push(id);
+  }
+  return { write, remove, outOfReach };
+}
 const pushedPeople = new Map();
 let pushedIndex = null;
 
@@ -436,30 +467,16 @@ export async function push() {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     const snap = snapshot();
-    // In a wardrobe shared with us person by person, the list is not ours:
-    // edit the people we were given, but add or remove nobody.
     const ownsList = pod.indexWritable;
-    let outOfReach = 0;
+    const plan = planPush(snap.people, pushedPeople, ownsList);
 
-    for (const person of snap.people) {
-      const json = JSON.stringify(person);
-      if (pushedPeople.get(person.id) === json) continue;
-      if (!ownsList && !pushedPeople.has(person.id)) {
-        outOfReach++;
-        continue;
-      }
+    for (const person of plan.write) {
       const url = rdf.personDocUrl(pod.base, person.id);
       await writeDoc(client, fetch, url, rdf.buildPerson(client, person, url));
-      pushedPeople.set(person.id, json);
+      pushedPeople.set(person.id, JSON.stringify(person));
     }
 
-    const living = new Set(snap.people.map((p) => p.id));
-    for (const id of [...pushedPeople.keys()]) {
-      if (living.has(id)) continue;
-      if (!ownsList) {
-        outOfReach++;
-        continue;
-      }
+    for (const id of plan.remove) {
       try {
         await client.deleteSolidDataset(rdf.personDocUrl(pod.base, id), { fetch });
       } catch {
@@ -479,7 +496,7 @@ export async function push() {
 
     pod.lastSync = new Date().toISOString();
     pod.migrated = false;
-    pod.error = outOfReach
+    pod.error = plan.outOfReach
       ? 'Only the people shared with you are saved here. Adding or removing people is up to whoever owns this wardrobe.'
       : null;
   } catch (err) {
@@ -554,6 +571,11 @@ export async function createViewLink(scope, { includeVitals = false } = {}) {
   }
 }
 
+/** Older versions kept view-link copies in a subfolder. Only look in it when
+    the folder listing says it exists, rather than asking for it every time. */
+export const legacyShareDirIn = (contained, base) =>
+  contained.includes(base + LEGACY_SHARE_DIR) ? [base + LEGACY_SHARE_DIR] : [];
+
 /** Every link currently live, read from the pod rather than remembered here. */
 export async function loadViewLinks() {
   if (pod.state !== 'on' || !pod.base) return;
@@ -566,8 +588,7 @@ export async function loadViewLinks() {
       try {
         const contained = client.getContainedResourceUrlAll(await client.getSolidDataset(dirs[i], { fetch }));
         urls.push(...contained.filter(isShareCopy));
-        // Older versions kept copies in a subfolder; look only if it is there.
-        if (i === 0 && contained.includes(pod.base + LEGACY_SHARE_DIR)) dirs.push(pod.base + LEGACY_SHARE_DIR);
+        if (i === 0) dirs.push(...legacyShareDirIn(contained, pod.base));
       } catch {
         /* unreadable: nothing to list */
       }
@@ -751,10 +772,15 @@ async function indexAccessFor(client, fetch, webId, personId, granted) {
     const access = await Promise.all(
       others.slice(i, i + 4).map((url) => client.universalAccess.getAgentAccess(url, webId, { fetch }).catch(() => null))
     );
-    if (access.some((a) => a === null || a.read)) return;
+    if (stillReads(access)) return;
   }
   await client.universalAccess.setAgentAccess(pod.indexUrl, webId, MODES.none, { fetch });
 }
+
+/** Whether these access checks leave the agent reading something here. An
+    answer that is not a clear "no" (null: the check failed) counts as yes,
+    so a busy server never costs anyone their access. */
+export const stillReads = (access) => access.some((a) => a === null || a?.read);
 
 function isMissing(err) {
   const code = err?.statusCode ?? err?.response?.status;
