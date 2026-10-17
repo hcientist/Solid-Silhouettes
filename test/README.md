@@ -10,6 +10,7 @@ bun add -d puppeteer-core @solid/community-server
 ```
 bun test/rdf.test.mjs        # no server needed
 bun --preload ./test/svelte-modules.mjs test/sync.test.mjs   # no server needed
+bun test/invites.test.mjs    # no server needed
 bun test/live-pod.test.mjs   # needs a server on :3111 (see below)
 bun test/storage.test.mjs    # needs a server on :3111
 ```
@@ -54,3 +55,12 @@ wardrobe shared person by person, when index access is taken back, and how a
 pasted address is read. Each check names the bug it would have caught and, where
 the behaviour rests on one, the Web Access Control, Solid Protocol or LDP
 requirement it follows.
+
+`invites.test.mjs` covers share notices: the Turtle a sharer posts to the
+recipient's inbox (Linked Data Notifications, Activity Streams 2.0), that an
+address which would break out of its `<>` is refused, and which notices the
+recipient's app shows. Anyone can post to an inbox, so a notice is only shown
+when the wardrobe really opens for the recipient and is not simply public; one
+older than a week, a repeat, or one for a wardrobe already accepted is deleted
+unseen. It also round-trips the accepted list through a preferences file
+without disturbing what else is in it.

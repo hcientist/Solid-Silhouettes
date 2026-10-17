@@ -1,6 +1,8 @@
 <script>
   import { doc, ui, select, selected, chalkHex, specLine } from './lib/store.svelte.js';
-  import { pod, bootPod, applyIncoming, keepLocal, WHOLE, forPerson } from './lib/solid.svelte.js';
+  import {
+    pod, bootPod, applyIncoming, keepLocal, WHOLE, forPerson, acceptShare, declineShare, ownerLabel
+  } from './lib/solid.svelte.js';
   import { fmtDate } from './lib/units.js';
   import { OUTLINE } from './lib/figure.js';
 
@@ -41,9 +43,22 @@
     if (!pod.needsLocation) askedWhere = false;
   });
 
+  /** A name for whoever owns the wardrobe that is open, if it is not ours. */
+  const whose = ownerLabel;
+  const viewingName = $derived(pod.viewing ? whose(pod.viewing) : null);
+
+  let answering = $state(null);
+  async function answer(notice, yes) {
+    answering = notice.url;
+    if (yes) await acceptShare(notice);
+    else await declineShare(notice);
+    answering = null;
+  }
+
   const podTag = $derived.by(() => {
     if (pod.needsLocation) return { cls: 'bad', text: 'pick a folder', long: '' };
     if (pod.syncing) return { cls: 'busy', text: 'saving', long: ' to pod' };
+    if (pod.state === 'on' && viewingName) return { cls: 'on', text: viewingName, long: '’s wardrobe' };
     if (pod.state === 'on') return { cls: 'on', text: 'pod', long: ' connected' };
     if (pod.state === 'connecting') return { cls: 'busy', text: 'connecting', long: '' };
     if (pod.state === 'error') return { cls: 'bad', text: 'pod', long: ' problem' };
@@ -80,7 +95,7 @@
   <div class="body">
     <nav class="roster" aria-label="Family">
       <div class="roster-head">
-        <span class="eyebrow">On the table</span>
+        <span class="eyebrow">{viewingName ? `${viewingName}’s table` : 'On the table'}</span>
         <span class="eyebrow">{doc.people.length}</span>
       </div>
 
@@ -154,7 +169,7 @@
             oneditVitals={() => (modal = { kind: 'vitals' })}
             oneditPerson={() => (modal = { kind: 'person', person })}
             onshare={() => (modal = { kind: 'share', scope: forPerson(person.id), title: person.name })}
-            canShare={pod.state === 'on' && !!pod.base}
+            canShare={pod.state === 'on' && !!pod.base && !pod.viewing}
           />
         {/if}
       </div>
@@ -176,6 +191,29 @@
   />
 {:else if modal?.kind === 'share'}
   <ShareDialog scope={modal?.scope} title={modal?.title} onclose={() => (modal = null)} />
+{/if}
+
+<!-- Shares waiting for an answer. Nothing joins the table until accepted. -->
+{#if pod.pending.length && !viewer.active}
+  <aside class="invites" aria-label="Shared with you">
+    {#each pod.pending.slice(0, 3) as n (n.url)}
+      <div class="invite">
+        <p class="invite-what">
+          <strong>{n.actorName || whose({ owner: n.actor })}</strong> shared a wardrobe with you.
+        </p>
+        <p class="hint">{n.actor}</p>
+        <div class="invite-actions">
+          <button class="btn ghost" disabled={answering === n.url} onclick={() => answer(n, false)}>Decline</button>
+          <button class="btn primary" disabled={answering === n.url} onclick={() => answer(n, true)}>
+            {answering === n.url ? 'Opening…' : 'Accept'}
+          </button>
+        </div>
+      </div>
+    {/each}
+    {#if pod.pending.length > 3}
+      <p class="hint">and {pod.pending.length - 3} more in the pod settings</p>
+    {/if}
+  </aside>
 {/if}
 
 <!-- Two copies, both with real content. The person picks; nothing is merged
@@ -213,6 +251,38 @@
 {/if}
 
 <style>
+  .invites {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 20;
+    width: min(360px, calc(100vw - 32px));
+    display: grid;
+    gap: 8px;
+  }
+  .invite {
+    border: 1px solid var(--mat-edge);
+    border-left: 2px solid var(--c4);
+    border-radius: 2px;
+    background: var(--mat-deep);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 12px;
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+  .invite-what {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--chalk);
+  }
+  .invite-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
   .cmp {
     margin: 0;
     font-family: var(--font-mono);

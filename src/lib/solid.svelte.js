@@ -7,6 +7,11 @@ import { doc, snapshot, replaceDoc, watchDoc } from './store.svelte.js';
 const WANTED = 'solidsilhouettes.pod.wanted';
 const LOCATION = 'solidsilhouettes.pod.location';
 const SYNCED = 'solidsilhouettes.pod.synced';
+/** Someone else's wardrobe this device had open, so a reload returns to it. */
+const OPEN = 'solidsilhouettes.pod.open';
+/** This device's copy of the "shared with me" list, per WebID, for pods
+    that give the app nowhere private to keep it. */
+const SHARED = 'solidsilhouettes.shared.v1';
 const PERSON_DOC = /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.ttl$/i;
 const INDEX_FILE = 'wardrobe.ttl';
 /** Written by versions before the move to RDF; read once, then left alone. */
@@ -55,24 +60,34 @@ export const pod = $state({
   /** set when the pod holds a newer copy than this device */
   incoming: null,
   /** false when this WebID may read the wardrobe but not change its list */
-  indexWritable: true
+  indexWritable: true,
+  /** the signed-in person's own wardrobe index, wherever we are looking */
+  ownIndexUrl: null,
+  /** set while someone else's wardrobe is open: { index, owner, ownerName } */
+  viewing: null,
+  /** wardrobes others shared that this person accepted */
+  others: [],
+  /** notices of shares waiting for an answer */
+  pending: []
 });
 
 let authn = null;
 let client = null;
 let rdf = null;
 let typeindex = null;
+let invites = null;
 
 async function libs() {
   if (!authn) {
-    [authn, client, rdf, typeindex] = await Promise.all([
+    [authn, client, rdf, typeindex, invites] = await Promise.all([
       import('@inrupt/solid-client-authn-browser'),
       import('@inrupt/solid-client'),
       import('./rdf.js'),
-      import('./typeindex.js')
+      import('./typeindex.js'),
+      import('./invites.js')
     ]);
   }
-  return { authn, client, rdf, typeindex };
+  return { authn, client, rdf, typeindex, invites };
 }
 
 const redirectUrl = () => window.location.origin + window.location.pathname;
@@ -123,6 +138,9 @@ export async function connect(issuerUrl) {
 
 export async function disconnect() {
   localStorage.removeItem(WANTED);
+  localStorage.removeItem(OPEN);
+  // Someone else's records do not stay behind in this browser.
+  if (pod.viewing) replaceDoc({ units: doc.units, people: [] });
   try {
     const { authn } = await libs();
     await authn.logout();
@@ -135,8 +153,10 @@ export async function disconnect() {
     state: 'off', webId: null, podUrl: null, base: null, indexUrl: null, legacyUrl: null,
     needsLocation: false, suggested: null, foundVia: null, registered: null,
     error: null, syncing: false, lastSync: null, unreadable: 0, migrated: false,
-    viewLinks: [], incoming: null, indexWritable: true
+    viewLinks: [], incoming: null, indexWritable: true,
+    ownIndexUrl: null, viewing: null, others: [], pending: []
   });
+  listUrl = null;
 }
 
 /* ---------------------------------------------------------------- where
@@ -148,7 +168,7 @@ export async function disconnect() {
 
 async function afterLogin(webId) {
   pod.webId = webId;
-  const { authn, client, rdf, typeindex } = await libs();
+  const { authn, client, rdf, typeindex, invites } = await libs();
   const fetch = authn.fetch;
 
   const podUrl = await findStorage(client, webId, fetch);
@@ -157,32 +177,62 @@ async function afterLogin(webId) {
   pod.suggested = pod.podUrl + DEFAULT_DIR;
   pod.state = 'on';
   pod.error = null;
+  await loadShared();
 
   // 1. What does their own pod say?
   const reg = await typeindex.findRegistration(client, webId, rdf.T.Wardrobe, fetch);
   const registered = reg?.instance ?? (reg?.container ? asContainer(reg.container) + INDEX_FILE : null);
-  if (registered) {
+  if (registered && !isForeign(registered)) {
     setLocation(registered, 'type-index');
-    return firstSync();
+    return startSync();
+  }
+
+  // Opening a shared wardrobe used to make it this person's own: in their
+  // type index and remembered here. Put it on their list of shared ones
+  // instead, keep it open, and find their own wardrobe as usual.
+  const remembered = localStorage.getItem(LOCATION);
+  const adopted = [registered, remembered].filter((url) => url && isForeign(url));
+  if (adopted.length) {
+    pod.others = mergeLists(pod.others, adopted.map((index) => ({ index, owner: null, ownerName: null })));
+    for (const entry of pod.others.filter((e) => adopted.includes(e.index))) {
+      writeList((c, ds) => invites.addToList(c, ds, entry, listUrl));
+    }
+    localStorage.setItem(OPEN, adopted[0]);
   }
 
   // 2. Somewhere we remember, or the folder older versions used.
-  const remembered = localStorage.getItem(LOCATION);
-  for (const candidate of [remembered, pod.suggested + INDEX_FILE].filter(Boolean)) {
+  for (const candidate of [isForeign(remembered) ? null : remembered, pod.suggested + INDEX_FILE].filter(Boolean)) {
     if (await exists(candidate, fetch)) {
       setLocation(candidate, 'existing');
       registerLocation();
-      return firstSync();
+      return startSync();
     }
   }
   if (await exists(pod.suggested + LEGACY_FILE, fetch)) {
     setLocation(pod.suggested + INDEX_FILE, 'existing');
     registerLocation();
-    return firstSync();
+    return startSync();
   }
 
   // 3. Nothing to go on: ask before writing anywhere.
   pod.needsLocation = true;
+  checkInbox();
+}
+
+/** A wardrobe outside this person's own storage is someone else's. */
+const isForeign = (url) => !!url && !!pod.podUrl && !url.startsWith(pod.podUrl);
+
+/** Own location settled: open whatever this device last had open, then
+    look for new shares. */
+async function startSync() {
+  const open = localStorage.getItem(OPEN);
+  const entry = open && pod.others.find((e) => e.index === open);
+  if (entry) {
+    setLocation(entry.index, 'shared', { own: false });
+    pod.viewing = entry;
+  } else localStorage.removeItem(OPEN);
+  await firstSync();
+  checkInbox();
 }
 
 /* Which container is the person's actual storage? A profile may say so with
@@ -225,14 +275,23 @@ async function exists(url, fetch) {
   }
 }
 
-function setLocation(indexUrl, via) {
+let ownVia = null;
+
+/** Point everything at a wardrobe. Only the person's own is remembered as
+    theirs; someone else's is never written to their type index. */
+function setLocation(indexUrl, via, { own = true } = {}) {
   pod.indexUrl = indexUrl;
   pod.indexWritable = true;
   pod.base = indexUrl.slice(0, indexUrl.lastIndexOf('/') + 1);
   pod.legacyUrl = pod.base + LEGACY_FILE;
   pod.foundVia = via;
   pod.needsLocation = false;
-  localStorage.setItem(LOCATION, indexUrl);
+  if (own) {
+    ownVia = via;
+    pod.ownIndexUrl = indexUrl;
+    pod.viewing = null;
+    localStorage.setItem(LOCATION, indexUrl);
+  }
 }
 
 /** Accepts either a container ("…/clothes/") or a full document URL. */
@@ -258,18 +317,30 @@ export async function chooseLocation(input) {
     pod.error = 'That does not look like an address inside a pod.';
     return false;
   }
+  // An address in someone else's pod is a wardrobe shared with us, not a new
+  // home for ours: open it as theirs and leave our own where it is.
+  if (isForeign(url)) {
+    const { invites } = await libs();
+    const entry = pod.others.find((e) => e.index === url) ?? { index: url, owner: null, ownerName: null };
+    pod.others = mergeLists(pod.others, [entry]);
+    await writeList((c, ds) => invites.addToList(c, ds, entry, listUrl));
+    return openWardrobe(entry);
+  }
   setLocation(url, 'chosen');
   pod.error = null;
   await registerLocation();
-  await firstSync();
+  await firstSync({ moving: true });
   return true;
 }
 
 async function registerLocation() {
+  // Taken now: by the time the libraries load, a shared wardrobe may be open.
+  const own = pod.ownIndexUrl;
+  if (!own) return;
   try {
     const { authn, client, rdf, typeindex } = await libs();
     pod.registered = await typeindex.register(
-      client, pod.webId, rdf.T.Wardrobe, pod.indexUrl, authn.fetch, pod.podUrl
+      client, pod.webId, rdf.T.Wardrobe, own, authn.fetch, pod.podUrl
     );
   } catch {
     pod.registered = { ok: false, reason: 'refused' };
@@ -280,6 +351,15 @@ async function registerLocation() {
 
 /* The device remembers which version it last agreed with the pod on, so on
    the next connect it can tell its own edits from someone else's. */
+/** Which wardrobe this device's copy was last synced with, or null. */
+function syncedUrl() {
+  try {
+    return JSON.parse(localStorage.getItem(SYNCED) ?? 'null')?.url ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function syncedAt() {
   try {
     const mark = JSON.parse(localStorage.getItem(SYNCED) ?? 'null');
@@ -300,14 +380,32 @@ function markSynced(at = doc.updatedAt) {
 /* On connecting, a copy nobody touched since the last sync gives way to the
    other. Only when both changed does the person decide; with no record of
    the last sync, the most recent edit wins unless both have real content. */
-async function firstSync() {
+async function firstSync({ moving = false } = {}) {
   loadViewLinks();
+  // This device's copy may be a different wardrobe: one shared with us that
+  // was open last time. It must never be pushed into this one. Moving our
+  // own wardrobe to a new folder is the exception: there it is the point.
+  const marked = syncedUrl();
+  const elsewhere = !moving && !!marked && marked !== pod.indexUrl;
   const remote = await pull({ quiet: true });
+  if (remote === null && pod.viewing) {
+    // Someone else's wardrobe that will not open (unshared, or gone): never
+    // seed it from this device. Go back to our own.
+    await openWardrobe(null, { flush: false });
+    pod.error = 'The wardrobe shared with you would not open, so your own is shown.';
+    return;
+  }
+  if (remote === null && elsewhere) {
+    replaceDoc({ units: doc.units, people: [] }); // nothing here yet, and what we hold is not ours to put here
+    rememberPushed();
+    markSynced();
+    return;
+  }
   if (remote === null) {
     await push(); // nothing there yet: seed the pod with this device
     return;
   }
-  const action = syncDecision({ remote, local: doc, mark: syncedAt(), indexWritable: pod.indexWritable });
+  const action = syncDecision({ remote, local: doc, mark: syncedAt(), indexWritable: pod.indexWritable, elsewhere });
   if (action === 'apply') applyIncoming(remote);
   else if (action === 'remember') rememberPushed();
   else if (action === 'ask') pod.incoming = remote;
@@ -317,9 +415,11 @@ async function firstSync() {
 /** What connecting should do with the pod's copy (remote) and this device's
     (local): 'push', 'apply' the pod's, 'remember' that they already agree,
     or 'ask' the person. mark is when the two last agreed, or null. */
-export function syncDecision({ remote, local, mark, indexWritable }) {
+export function syncDecision({ remote, local, mark, indexWritable, elsewhere = false }) {
   // Someone holding only part of a wardrobe takes the pod's copy, never pushes theirs over it.
   if (!indexWritable) return 'apply';
+  // This device's copy is another wardrobe's: there is nothing to compare.
+  if (elsewhere) return 'apply';
 
   const localHas = local.people.length > 0;
   const remoteHas = Array.isArray(remote.people) && remote.people.length > 0;
@@ -357,6 +457,19 @@ export async function pull({ quiet = false } = {}) {
   if (pod.state !== 'on' || !pod.indexUrl) return null;
   pod.syncing = true;
   try {
+    return await readCurrent();
+  } catch (err) {
+    if (!quiet) fail(err, 'The pod would not hand over the wardrobe.', true);
+    return null;
+  } finally {
+    pod.syncing = false;
+  }
+}
+
+/** The wardrobe at the current location, null when nothing is stored there.
+    Throws when the pod will not say. */
+async function readCurrent() {
+  try {
     const { authn, client, rdf } = await libs();
     const fetch = authn.fetch;
     const indexDs = await client.getSolidDataset(pod.indexUrl, { fetch });
@@ -382,10 +495,7 @@ export async function pull({ quiet = false } = {}) {
     return parsed;
   } catch (err) {
     if (isMissing(err)) return await pullLegacy();
-    if (!quiet) fail(err, 'The pod would not hand over the wardrobe.', true);
-    return null;
-  } finally {
-    pod.syncing = false;
+    throw err;
   }
 }
 
@@ -461,7 +571,7 @@ async function writeDoc(client, fetch, url, fresh) {
 }
 
 export async function push() {
-  if (pod.state !== 'on' || pod.incoming || !pod.indexUrl) return;
+  if (pod.state !== 'on' || pod.incoming || !pod.indexUrl) return false;
   pod.syncing = true;
   try {
     const { authn, client, rdf } = await libs();
@@ -499,8 +609,10 @@ export async function push() {
     pod.error = plan.outOfReach
       ? 'Only the people shared with you are saved here. Adding or removing people is up to whoever owns this wardrobe.'
       : null;
+    return true;
   } catch (err) {
     fail(err, 'The pod did not accept the save. Check you are still signed in, then try again.', true);
+    return false;
   } finally {
     pod.syncing = false;
   }
@@ -781,6 +893,271 @@ async function indexAccessFor(client, fetch, webId, personId, granted) {
     answer that is not a clear "no" (null: the check failed) counts as yes,
     so a busy server never costs anyone their access. */
 export const stillReads = (access) => access.some((a) => a === null || a?.read);
+
+/* ------------------------------------------------ shared with me
+
+   Granting access tells the recipient nothing, so the sharer also leaves a
+   notice in their inbox (see invites.js). The recipient answers it here;
+   only an accepted share ever reaches their list. */
+
+/** Where the accepted list lives in this person's pod, or null. */
+let listUrl = null;
+
+function localList() {
+  try {
+    return JSON.parse(localStorage.getItem(SHARED) ?? '{}')[pod.webId] ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalList(list) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SHARED) ?? '{}');
+    all[pod.webId] = list;
+    localStorage.setItem(SHARED, JSON.stringify(all));
+  } catch {
+    /* storage unavailable: the pod copy is the one that counts */
+  }
+}
+
+const mergeLists = (...lists) => {
+  const out = new Map();
+  for (const e of lists.flat()) if (e?.index && !out.has(e.index)) out.set(e.index, e);
+  return [...out.values()];
+};
+
+/** Read the accepted list from the pod, falling back to this device's copy. */
+async function loadShared() {
+  let fromPod = [];
+  try {
+    const { authn, client, typeindex, invites } = await libs();
+    const fetch = authn.fetch;
+    const privateIndex = (await typeindex.indexUrls(client, pod.webId, fetch)).find((i) => i.private)?.url ?? null;
+    listUrl = await invites.listDocUrl(client, pod.webId, fetch, privateIndex);
+    if (listUrl) fromPod = invites.readList(client, await client.getSolidDataset(listUrl, { fetch }));
+  } catch (err) {
+    console.warn('could not read the shared-with-me list', err);
+  }
+  pod.others = mergeLists(fromPod, localList());
+  saveLocalList(pod.others);
+}
+
+/** Change the list in the pod; this device's copy changes regardless. */
+async function writeList(change) {
+  saveLocalList(pod.others);
+  if (!listUrl) return false;
+  try {
+    const { authn, client } = await libs();
+    const ds = await client.getSolidDataset(listUrl, { fetch: authn.fetch });
+    await client.saveSolidDatasetAt(listUrl, change(client, ds), { fetch: authn.fetch });
+    return true;
+  } catch (err) {
+    console.warn('could not update the shared-with-me list', err);
+    return false;
+  }
+}
+
+/** Who to name for a shared wardrobe: the name they gave, else the most
+    telling part of their WebID. */
+export function ownerLabel(e) {
+  if (e?.ownerName) return e.ownerName;
+  try {
+    if (e?.owner) {
+      const url = new URL(e.owner);
+      const path = url.pathname.replace(/\/profile\/card$/, '').split('/').filter(Boolean);
+      return (path.pop() ?? url.hostname.split('.')[0]).replace(/^~/, '');
+    }
+    // No WebID on record: a ~name in the address (Nextcloud), else the host.
+    const url = new URL(e.index);
+    const tilde = url.pathname.split('/').find((part) => part.startsWith('~'));
+    return tilde ? tilde.slice(1) : url.hostname.split('.')[0];
+  } catch {
+    return 'Someone';
+  }
+}
+
+/** Open someone else's wardrobe (entry), or our own (null). Whatever is open
+    is saved first, and the one opened replaces this device's copy outright:
+    the two are different wardrobes, so there is nothing to merge. */
+export async function openWardrobe(entry, { flush = true } = {}) {
+  if (pod.state !== 'on') return false;
+  const index = entry ? entry.index : pod.ownIndexUrl;
+  if (!index) {
+    pod.needsLocation = true;
+    return false;
+  }
+  if (index === pod.indexUrl && (entry?.index ?? null) === (pod.viewing?.index ?? null)) return true;
+
+  clearTimeout(timer);
+  if (flush && pod.indexUrl && !(await push())) {
+    if (pod.incoming) pod.error = 'Settle which copy to keep before opening another wardrobe.';
+    return false;
+  }
+
+  const prev = { indexUrl: pod.indexUrl, foundVia: pod.foundVia, viewing: pod.viewing, writable: pod.indexWritable };
+  setLocation(index, entry ? 'shared' : ownVia, { own: !entry });
+  pod.viewing = entry;
+  pod.syncing = true;
+  let remote;
+  try {
+    remote = await readCurrent();
+    if (!remote && entry) throw new Error('nothing stored there');
+  } catch (err) {
+    if (prev.indexUrl) {
+      setLocation(prev.indexUrl, prev.foundVia, { own: !prev.viewing });
+      pod.viewing = prev.viewing;
+      pod.indexWritable = prev.writable;
+    }
+    fail(err, entry
+      ? 'That wardrobe would not open. It may no longer be shared with you.'
+      : 'Your own wardrobe would not open just now. Try again in a moment.', true);
+    return false;
+  } finally {
+    pod.syncing = false;
+  }
+
+  pod.incoming = null;
+  pod.viewLinks = [];
+  replaceDoc(remote ?? { units: doc.units, people: [] });
+  rememberPushed();
+  markSynced();
+  pod.error = null;
+  try {
+    if (entry) localStorage.setItem(OPEN, entry.index);
+    else localStorage.removeItem(OPEN);
+  } catch {
+    /* only the reload target is lost */
+  }
+  if (!entry) loadViewLinks();
+  return true;
+}
+
+/** Look through our inbox for share notices; tidy up the ones that should
+    not be shown. Other apps' notifications are left alone. */
+export async function checkInbox() {
+  if (pod.state !== 'on' || !pod.webId) return;
+  try {
+    const { authn, client, invites } = await libs();
+    const fetch = authn.fetch;
+    const inbox = await invites.inboxOf(client, pod.webId, fetch);
+    if (!inbox) return void (pod.pending = []);
+    const items = client
+      .getContainedResourceUrlAll(await client.getSolidDataset(inbox, { fetch }))
+      .filter((url) => !url.endsWith('.acl') && !url.endsWith('/'));
+
+    const notices = [];
+    for (let i = 0; i < items.length; i += 4) {
+      const batch = await Promise.all(items.slice(i, i + 4).map(async (url) => {
+        try {
+          return invites.readNotice(client, await client.getSolidDataset(url, { fetch }), url);
+        } catch {
+          return null; // not RDF, or not readable: not ours
+        }
+      }));
+      notices.push(...batch.filter(Boolean));
+    }
+
+    const newest = invites.newestPerWardrobe(notices);
+    const accepted = [pod.ownIndexUrl, ...pod.others.map((e) => e.index)].filter(Boolean);
+    const now = Date.now();
+    const keep = [];
+    for (const n of notices) {
+      const ctx = { now, accepted, newest: newest.get(n.object) };
+      let verdict = invites.staleness(n, ctx);
+      if (!verdict) verdict = invites.triage(n, { ...ctx, access: await accessTo(n.object, fetch) });
+      if (verdict === 'keep') keep.push({ ...n, actorName: await invites.nameOf(client, n.actor, fetch) });
+      else if (verdict !== 'later') await removeNotice(n.url, fetch);
+    }
+    keep.sort((a, b) => b.published - a.published);
+    pod.pending = keep;
+  } catch (err) {
+    console.warn('could not read the inbox', err); // no inbox is the same as no news
+  }
+}
+
+/** Whether the wardrobe opens for us, and whether it opens for anyone. */
+async function accessTo(url, fetch) {
+  try {
+    const res = await fetch(url, { method: 'HEAD' });
+    if ([401, 403, 404, 410].includes(res.status)) return 'denied';
+    if (!res.ok) return null;
+    let anyone = false;
+    try {
+      anyone = (await window.fetch(url, { method: 'HEAD', credentials: 'omit' })).ok;
+    } catch {
+      /* unreachable without credentials: not public */
+    }
+    return { user: { read: true }, public: { read: anyone } };
+  } catch {
+    return null;
+  }
+}
+
+async function removeNotice(url, fetch) {
+  try {
+    await fetch(url, { method: 'DELETE' });
+  } catch {
+    /* the next check tries again */
+  }
+}
+
+/** Yes to a share: it joins the list, the notice goes, and it opens. */
+export async function acceptShare(notice, { open = true } = {}) {
+  const { authn, client, invites } = await libs();
+  const entry = { index: notice.object, owner: notice.actor, ownerName: notice.actorName ?? null };
+  pod.others = mergeLists(pod.others, [entry]);
+  await writeList((c, ds) => invites.addToList(c, ds, entry, listUrl));
+  await removeNotice(notice.url, authn.fetch);
+  pod.pending = pod.pending.filter((n) => n.url !== notice.url);
+  return open ? openWardrobe(entry) : true;
+}
+
+/** No to a share: the notice goes. Their access is theirs to take back. */
+export async function declineShare(notice) {
+  const { authn } = await libs();
+  await removeNotice(notice.url, authn.fetch);
+  pod.pending = pod.pending.filter((n) => n.url !== notice.url);
+}
+
+/** Take a wardrobe off the list (going back to our own if it is open). */
+export async function forgetShared(entry) {
+  if (pod.viewing?.index === entry.index && !(await openWardrobe(null))) return false;
+  const { invites } = await libs();
+  pod.others = pod.others.filter((e) => e.index !== entry.index);
+  await writeList((c, ds) => invites.removeFromList(c, ds, entry.index, listUrl));
+  return true;
+}
+
+/** Tell someone we shared with them, through their inbox. Best effort: a
+    profile without an inbox means sending the address by hand. */
+export async function announceShare(webId, scope) {
+  const target = (webId || '').trim();
+  if (pod.state !== 'on' || pod.viewing || !pod.indexUrl) return { sent: false, reason: 'not-ours' };
+  try {
+    const { authn, client, invites } = await libs();
+    const fetch = authn.fetch;
+    const inbox = await invites.inboxOf(client, target, fetch);
+    if (!inbox) return { sent: false, reason: 'no-inbox' };
+    const me = (await invites.nameOf(client, pod.webId, fetch)) ?? pod.webId;
+    const what = scope.kind === 'all' ? 'their wardrobe' : 'someone from their wardrobe';
+    const res = await fetch(inbox, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/turtle', Slug: 'solidsilhouettes-share' },
+      body: invites.noticeTurtle({
+        actor: pod.webId,
+        object: pod.indexUrl,
+        target,
+        summary: `${me} shared ${what} with you in Solid Silhouettes.`,
+        published: Date.now()
+      })
+    });
+    return res.ok ? { sent: true } : { sent: false, reason: 'refused', status: res.status };
+  } catch (err) {
+    console.warn('could not send the share notice', err);
+    return { sent: false, reason: 'unreachable' };
+  }
+}
 
 function isMissing(err) {
   const code = err?.statusCode ?? err?.response?.status;

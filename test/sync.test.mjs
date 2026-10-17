@@ -77,6 +77,16 @@ const settle = () => new Promise((r) => setTimeout(r, 0)).then(() => flushSync()
     decide({ people: has, updatedAt: T1 }, { people: has, updatedAt: T3 }, at(T1), false));
   eq('read-only list with no readable people: still never push', 'apply',
     decide({ people: [], updatedAt: T1 }, { people: has, updatedAt: T3 }, null, false));
+
+  // Bug: with a shared wardrobe open last time, this device's copy holds the
+  // other person's people. Starting on our own wardrobe compared the two as
+  // if they were versions of one, and the newer local copy was pushed into
+  // our own pod.
+  const other = (remote, local) => syncDecision({ remote, local, mark: null, indexWritable: true, elsewhere: true });
+  eq('device copy is another wardrobe, local newer: take the pod copy', 'apply',
+    other({ people: has, updatedAt: T1 }, { people: has, updatedAt: T3 }));
+  eq('device copy is another wardrobe, this one empty: still never push', 'apply',
+    other({ people: [], updatedAt: T1 }, { people: has, updatedAt: T3 }));
 }
 
 /* ------------------------------------------------ what a push may touch */

@@ -2,7 +2,7 @@
   import { untrack } from 'svelte';
   import Dialog from './Dialog.svelte';
   import {
-    pod, scopeUrl, readAccess, setAccess, WHOLE,
+    pod, scopeUrl, readAccess, setAccess, announceShare, WHOLE,
     createViewLink, loadViewLinks, revokeViewLink
   } from './solid.svelte.js';
   import { fmtDate } from './units.js';
@@ -25,6 +25,7 @@
   let making = $state(false);
   let linkError = $state(null);
   let fresh = $state(null);
+  let told = $state(null);
 
   // Recipients always open the folder; a person share shows them just that person.
   const url = $derived(scopeUrl(WHOLE));
@@ -68,11 +69,25 @@
 
   async function give() {
     formError = null;
+    told = null;
     busy = true;
-    const res = await setAccess(scope, webId, level);
-    busy = false;
-    if (!res.ok) return (formError = res.error);
+    const id = webId.trim();
+    const res = await setAccess(scope, id, level);
+    if (!res.ok) {
+      busy = false;
+      return (formError = res.error);
+    }
     webId = '';
+    const note = await announceShare(id, scope);
+    busy = false;
+    told = note.sent
+      ? { ok: true, text: 'They have been sent a notice, and will be asked to accept next time they open Solid Silhouettes.' }
+      : {
+          ok: false,
+          text: note.reason === 'no-inbox'
+            ? 'Their profile has no inbox to send a notice to, so send them the address above yourself.'
+            : 'The notice could not be delivered to their inbox, so send them the address above yourself.'
+        };
     await refresh();
   }
 
@@ -115,7 +130,10 @@
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <p class="hint">Access is granted to a WebID; send them the link yourself.</p>
+      <p class="hint">
+        Access is granted to a WebID. They also get a notice in their pod’s inbox
+        asking them to accept; if it cannot be delivered, send them this address.
+      </p>
     </div>
 
     <div class="field">
@@ -137,6 +155,7 @@
         <button class="btn primary" onclick={give} disabled={busy || !webId.trim()}>Give access</button>
       </div>
       {#if formError}<div class="notice">{formError}</div>{/if}
+      {#if told}<div class="notice" class:ok={told.ok}>{told.text}</div>{/if}
     </div>
 
     <hr class="rule-line" />

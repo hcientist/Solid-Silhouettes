@@ -2,7 +2,8 @@
   import Dialog from './Dialog.svelte';
   import {
     pod, ISSUERS, connect, disconnect, push, pull, applyIncoming,
-    chooseLocation, normaliseLocation
+    chooseLocation, normaliseLocation, openWardrobe, acceptShare, declineShare,
+    forgetShared, ownerLabel
   } from './solid.svelte.js';
   import { fmtDate } from './units.js';
 
@@ -36,6 +37,13 @@
     if (remote) applyIncoming(remote);
   }
 
+  let switching = $state(null);
+  async function run(key, job) {
+    switching = key;
+    await job();
+    switching = null;
+  }
+
   function startMove() {
     where = pod.base ?? pod.suggested ?? '';
     moving = true;
@@ -43,7 +51,7 @@
 </script>
 
 <Dialog
-  title={pod.needsLocation ? 'Where should this live?' : pod.state === 'on' ? 'Your pod' : 'Connect a pod'}
+  title={pod.needsLocation ? 'Where should this live?' : pod.viewing ? `${ownerLabel(pod.viewing)}’s wardrobe` : pod.state === 'on' ? 'Your pod' : 'Connect a pod'}
   kicker={pod.needsLocation ? pod.webId : 'Where this is kept'}
   {onclose}
 >
@@ -102,6 +110,11 @@
           This wardrobe belongs to someone else. You see the people they shared
           with you, and your changes to them are saved to their pod.
         </div>
+      {:else if pod.viewing}
+        <div class="notice">
+          This wardrobe belongs to {ownerLabel(pod.viewing)}, who shared all of it
+          with you. Your changes are saved to their pod.
+        </div>
       {:else if pod.unreadable}
         <div class="notice">
           {pod.unreadable}
@@ -124,12 +137,17 @@
       <div class="field">
         <div class="hist-head">
           <span class="eyebrow">Folder</span>
-          <button class="btn ghost" style="height:24px;padding:0 8px;font-size:10px" onclick={startMove}>
-            Change
-          </button>
+          {#if !pod.viewing}
+            <button class="btn ghost" style="height:24px;padding:0 8px;font-size:10px" onclick={startMove}>
+              Change
+            </button>
+          {/if}
         </div>
         <p class="addr">{pod.base}</p>
         <p class="hint">
+          {#if pod.viewing}
+            Shared with you{pod.viewing.owner ? ` by ${pod.viewing.owner}` : ''}.
+          {:else}
           {foundVia[pod.foundVia] ?? ''}
           {#if pod.registered?.ok}
             Registered in your {pod.registered.private ? 'private' : 'public'} type index.
@@ -137,8 +155,56 @@
             Your profile has no type index this app could write to, so the
             location is only remembered on this device.
           {/if}
+          {/if}
         </p>
       </div>
+
+      {#if pod.others.length || pod.pending.length || pod.viewing}
+        <div class="field">
+          <span class="eyebrow">Wardrobes</span>
+          <ul class="wardrobes">
+            <li>
+              <span class="who">Mine</span>
+              {#if pod.viewing}
+                <button class="btn ghost small wide" disabled={!!switching} onclick={() => run('mine', () => openWardrobe(null))}>
+                  {switching === 'mine' ? 'Opening…' : 'Open'}
+                </button>
+              {:else}
+                <span class="lvl wide">open</span>
+              {/if}
+            </li>
+            {#each pod.others as e (e.index)}
+              <li>
+                <span class="who">{ownerLabel(e)}’s<span class="sub">{e.index.replace(/^https?:\/\//, '')}</span></span>
+                {#if pod.viewing?.index === e.index}
+                  <span class="lvl">open</span>
+                {:else}
+                  <button class="btn ghost small" disabled={!!switching} onclick={() => run(e.index, () => openWardrobe(e))}>
+                    {switching === e.index ? 'Opening…' : 'Open'}
+                  </button>
+                {/if}
+                <button class="btn ghost danger small" disabled={!!switching} onclick={() => run(e.index, () => forgetShared(e))}>
+                  Remove
+                </button>
+              </li>
+            {/each}
+            {#each pod.pending as n (n.url)}
+              <li>
+                <span class="who">{n.actorName || ownerLabel({ owner: n.actor })}’s<span class="sub">waiting for your answer</span></span>
+                <button class="btn ghost small" disabled={!!switching} onclick={() => run(n.url, () => declineShare(n))}>Decline</button>
+                <button class="btn primary small" disabled={!!switching} onclick={() => run(n.url, () => acceptShare(n))}>
+                  {switching === n.url ? 'Opening…' : 'Accept'}
+                </button>
+              </li>
+            {/each}
+          </ul>
+          <p class="hint">
+            Someone sharing with you leaves a notice in your pod’s inbox. Nothing
+            is added here until you accept, and a notice you leave unanswered is
+            deleted after a week.
+          </p>
+        </div>
+      {/if}
 
       <div class="field">
         <span class="eyebrow">Last write</span>
@@ -147,6 +213,7 @@
         </p>
       </div>
 
+      {#if !pod.viewing}
       <div class="field">
         <span class="eyebrow">Sharing</span>
         <button class="issuer" onclick={onshare}>
@@ -158,6 +225,7 @@
           document of their own, so they can be handed over separately.
         </p>
       </div>
+      {/if}
     {:else if pod.state === 'connecting'}
       <p class="hint">Waiting on your pod provider…</p>
     {:else}
@@ -229,6 +297,47 @@
     line-height: 1.5;
     color: var(--chalk-2);
     overflow-wrap: anywhere;
+  }
+  .wardrobes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+  .wardrobes li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .wardrobes .who {
+    min-width: 0;
+    font-size: 14px;
+    color: var(--chalk);
+    display: grid;
+  }
+  .wardrobes .sub {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--chalk-3);
+    overflow-wrap: anywhere;
+  }
+  .wardrobes .lvl {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--chalk-3);
+    justify-self: end;
+  }
+  .wardrobes .wide {
+    grid-column: span 2;
+    justify-self: end;
+  }
+  .small {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 10px;
   }
   .inline {
     display: grid;
